@@ -20,6 +20,7 @@ import {
   type Recording,
 } from '../lib/pose';
 import { fmtW } from '../lib/progress';
+import { BestWorst, RepStrip, SetReplay, type Still } from './SetReview';
 import { uid } from '../lib/store';
 import type { Exercise } from '../lib/types';
 
@@ -44,7 +45,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const [ghostReps, setGhostReps] = useState<number | null>(null);
   const [bars, setBars] = useState<number[]>([]);
   const [sig, setSig] = useState(priorSignal(ex));
-  const [result, setResult] = useState<{ rec: Recording; a: Analysis } | null>(null);
+  const [result, setResult] = useState<{ rec: Recording; a: Analysis; stills: (Still | null)[] } | null>(null);
   const ghost = useRef<Recording | null>(null);
   const stopRef = useRef<() => void>(() => {});
   const finishRef = useRef<() => void>(() => {});
@@ -80,6 +81,9 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     let started = false;
     let inFrameSince = 0;
     let anchorLive: { x: number; y: number; s: number } | null = null;
+    // deepest moment of each rep, kept in memory only for the summary (never saved)
+    const stills: (Still | null)[] = [];
+    let cand: { cv: HTMLCanvasElement; frame: Frame; prog: number } | null = null;
 
     const finish = () => {
       if (dead) return;
@@ -100,7 +104,13 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       const shift = rec.frames[0]?.t ?? 0;
       rec.frames = rec.frames.map((f) => ({ ...f, t: Math.round((f.t - shift) * 1000) / 1000 }));
       rec.reps = rec.reps.map((r) => ({ ...r, t0: r.t0 - shift, t1: r.t1 - shift }));
-      setResult({ rec, a: analyse(rec, ghost.current) });
+      // dev only: pretend later reps were shallower, to preview the grading + overlay
+      if (import.meta.env.DEV && location.search.includes('testshallow')) rec.reps = rec.reps.map((r, i) => ({ ...r, rom: r.rom * (i >= 3 ? 0.82 - (i - 3) * 0.05 : 1) }));
+      setResult({
+        rec,
+        a: analyse(rec, ghost.current),
+        stills: stills.map((x) => x),
+      });
       setPhase('summary');
     };
     finishRef.current = finish;
@@ -218,6 +228,17 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             lastRec = t;
           }
           const rep = counter.push(t, signals(f));
+          if (counter.progress > Math.max(0.5, cand?.prog ?? 0)) {
+            const cv = cand?.cv ?? document.createElement('canvas');
+            cv.width = 360;
+            cv.height = Math.round((360 * v.videoHeight) / v.videoWidth);
+            cv.getContext('2d')!.drawImage(v, 0, 0, cv.width, cv.height);
+            cand = { cv, frame: f, prog: counter.progress };
+          }
+          if (rep) {
+            stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : null);
+            cand = null;
+          }
           setSig(counter.signal);
           if (rep) {
             chimeRep(counter.reps.length);
@@ -400,40 +421,18 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       <AnimatePresence>
         {phase === 'summary' && result && (
           <motion.div className="ghost-sheet" initial={{ y: '100%' }} animate={{ y: 0 }} transition={spring}>
-            <span className="eyebrow accent">Ghost Set</span>
+            <span className="eyebrow accent">Ghost Set · {result.a.reps} reps</span>
             <h2 className="ghost-verdict">{result.a.verdict}</h2>
-            <div className="ghost-stats tnum">
-              <div>
-                <b>{result.a.reps}</b>
-                <span>reps</span>
-              </div>
-              <div>
-                <b>
-                  {result.a.vsGhost
-                    ? `${result.a.vsGhost.depth >= 0 ? '+' : '−'}${Math.abs(Math.round(result.a.vsGhost.depth * 100))}%`
-                    : `${Math.round(result.a.romAvg)}${result.rec.signal === 'rise' ? '' : '°'}`}
-                </b>
-                <span>{result.a.vsGhost ? 'range vs ghost' : 'avg range'}</span>
-              </div>
-              <div>
-                <b className="rir">{result.a.rir.replace(' reps left', '').replace(' rep left', '')}</b>
-                <span>{/left/.test(result.a.rir) ? 'reps in tank (est.)' : 'effort (est.)'}</span>
-              </div>
+            {result.a.reps > 0 && <RepStrip a={result.a} />}
+            <BestWorst stills={result.stills} a={result.a} rec={result.rec} mirrored={mirrored} />
+            <div className="ghost-facts tnum">
+              {result.a.vsLine && <span>{result.a.vsLine}</span>}
+              <span>
+                Effort (est.): <b>{result.a.rir}</b>
+              </span>
             </div>
-            {result.rec.reps.length > 0 && (
-              <div className="rep-bars big">
-                {result.rec.reps.map((r, i) => (
-                  <i
-                    key={i}
-                    className={result.a.slowest?.rep === i + 1 && result.a.slowest.slow > 0.2 ? 'slow' : ''}
-                    style={{ height: `${Math.max(14, (r.dur / Math.max(...result.rec.reps.map((x) => x.dur))) * 100)}%` }}
-                  >
-                    <small>{r.dur.toFixed(1)}s</small>
-                  </i>
-                ))}
-              </div>
-            )}
             {result.a.tip && <p className="ghost-tip">{result.a.tip}</p>}
+            {result.a.reps > 0 && <SetReplay rec={result.rec} grades={result.a.grades} />}
             <div className="stack">
               {result.a.reps > 0 ? (
                 <button

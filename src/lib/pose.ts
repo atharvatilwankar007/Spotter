@@ -276,14 +276,22 @@ export class RepCounter {
 
 /* ---------- set analysis ---------- */
 
+export type Grade = 'full' | 'short' | 'cut';
+export const GRADE_LABEL: Record<Grade, string> = { full: 'Full range', short: 'A bit short', cut: 'Cut short' };
+
 export interface Analysis {
   reps: number;
   romAvg: number;
   romDrop: number; // last reps vs first reps, fraction
+  grades: Grade[]; // each rep's range vs your best rep in this set
+  best: number; // index of the deepest rep
+  worst: number; // index of the shallowest rep
   slowest: { rep: number; slow: number } | null; // slow = fraction slower than fastest early rep
+  speed: number[]; // each rep's speed relative to the fastest (1 = fastest)
   rir: string;
   vsGhost: { depth: number; weight: number; reps: number } | null;
-  verdict: string;
+  verdict: string; // the story of this set
+  vsLine: string | null; // compared with last time
   tip: string | null;
 }
 
@@ -295,40 +303,78 @@ export function analyse(rec: { reps: RepStat[]; weight: number; signal: Signal }
   const tail = r.slice(-Math.min(2, n));
   const romDrop = n >= 4 ? 1 - tail.reduce((a, x) => a + x.rom, 0) / tail.length / (head.reduce((a, x) => a + x.rom, 0) / head.length) : 0;
 
+  // grade every rep against the best rep of this set
+  const maxRom = Math.max(0, ...r.map((x) => x.rom));
+  const grades: Grade[] = r.map((x) => (x.rom >= maxRom * 0.9 ? 'full' : x.rom >= maxRom * 0.78 ? 'short' : 'cut'));
+  let best = 0;
+  let worst = 0;
+  r.forEach((x, i) => {
+    if (x.rom > r[best].rom) best = i;
+    if (x.rom < r[worst].rom) worst = i;
+  });
+
   let slowest: Analysis['slowest'] = null;
   let loss = 0;
+  const fastestDur = n ? Math.min(...r.slice(0, Math.min(3, n)).map((x) => x.dur)) : 1;
+  const speed = r.map((x) => Math.min(1, fastestDur / x.dur));
   if (n >= 3) {
-    const fastest = Math.min(...r.slice(0, 3).map((x) => x.dur));
     r.forEach((x, i) => {
-      const s = x.dur / fastest - 1;
-      if (!slowest || s > slowest.slow) slowest = { rep: i + 1, slow: s };
+      const sl = x.dur / fastestDur - 1;
+      if (!slowest || sl > slowest.slow) slowest = { rep: i + 1, slow: sl };
     });
-    loss = r[n - 1].dur / fastest - 1;
+    loss = r[n - 1].dur / fastestDur - 1;
   }
   const rir = n < 3 ? 'need 3+ reps to judge' : loss < 0.15 ? '3+ reps left' : loss < 0.3 ? '~2 reps left' : loss < 0.5 ? '~1 rep left' : 'at or near failure';
 
+  // the story: where range held, where it dropped, how the last rep moved
+  const parts: string[] = [];
+  const fullCount = grades.filter((g) => g === 'full').length;
+  const firstDrop = grades.findIndex((g) => g !== 'full');
+  if (!n) parts.push('No reps detected');
+  else if (fullCount === n) parts.push(n === 1 ? '1 full rep' : `All ${n} reps full range`);
+  else if (firstDrop > 0 && grades.slice(firstDrop).every((g) => g !== 'full'))
+    parts.push(`${firstDrop === 1 ? 'Rep 1' : `Reps 1–${firstDrop}`} solid`, `range dropped from rep ${firstDrop + 1}`);
+  else parts.push(`${fullCount} of ${n} reps full range`);
+  if (n >= 3 && loss > 0.4) parts.push('last rep ground out');
+  else if (slowest && (slowest as { slow: number }).slow > 0.25) {
+    const sl = slowest as { rep: number; slow: number };
+    parts.push(`rep ${sl.rep} slowed ${Math.round(sl.slow * 100)}%`);
+  }
+  const verdict = parts.join(' · ');
+
   let vsGhost: Analysis['vsGhost'] = null;
+  let vsLine: string | null = null;
   if (ghost && ghost.reps.length && ghost.signal === rec.signal) {
     const gRom = ghost.reps.reduce((a, x) => a + x.rom, 0) / ghost.reps.length;
     vsGhost = { depth: gRom ? romAvg / gRom - 1 : 0, weight: rec.weight - ghost.weight, reps: n - ghost.reps.length };
-  }
-
-  const parts: string[] = [];
-  if (vsGhost) {
-    parts.push(vsGhost.weight === 0 ? 'Same weight' : `${vsGhost.weight > 0 ? '+' : '−'}${Math.abs(vsGhost.weight)} kg`);
+    const v: string[] = [];
+    v.push(vsGhost.weight === 0 ? 'Same weight' : `${vsGhost.weight > 0 ? '+' : '−'}${Math.abs(vsGhost.weight)} kg`);
     const d = Math.round(vsGhost.depth * 100);
-    parts.push(Math.abs(d) < 3 ? 'same range' : d > 0 ? `${d}% more range` : `${-d}% less range`);
-    if (vsGhost.reps) parts.push(`${vsGhost.reps > 0 ? '+' : '−'}${Math.abs(vsGhost.reps)} rep${Math.abs(vsGhost.reps) === 1 ? '' : 's'} on last time`);
+    v.push(Math.abs(d) < 3 ? 'same range' : d > 0 ? `${d}% more range` : `${-d}% less range`);
+    if (vsGhost.reps) v.push(`${vsGhost.reps > 0 ? '+' : '−'}${Math.abs(vsGhost.reps)} rep${Math.abs(vsGhost.reps) === 1 ? '' : 's'}`);
+    vsLine = `vs last time: ${v.join(' · ')}`;
   }
-  if (slowest && (slowest as { slow: number }).slow > 0.2) {
-    const s = slowest as { rep: number; slow: number };
-    parts.push(`rep ${s.rep} slowed ${Math.round(s.slow * 100)}%`);
-  }
-  const verdict = parts.length ? parts.join(' · ') : n ? `${n} clean reps` : 'No reps detected';
 
   let tip: string | null = null;
-  if (romDrop > 0.12) tip = `Your range shrank ${Math.round(romDrop * 100)}% on the last reps — that's fatigue cutting reps short. Count only the full ones, or drop a little weight.`;
+  if (romDrop > 0.12) tip = `Your range shrank ${Math.round(romDrop * 100)}% on the last reps — fatigue cutting reps short. Count only the full ones, or drop a little weight.`;
   else if (vsGhost && vsGhost.depth < -0.08) tip = 'Less range than last time. If the weight went up, that may be why — earn it with full reps first.';
   else if (n >= 3 && loss < 0.1) tip = 'Speed barely dropped. You likely had more in the tank — try one more rep or the next weight up.';
-  return { reps: n, romAvg, romDrop, slowest, rir, vsGhost, verdict, tip };
+  return { reps: n, romAvg, romDrop, grades, best, worst, slowest, speed, rir, vsGhost, verdict, vsLine, tip };
+}
+
+/** the three joints that make the angle for each signal, as KP indices [left side, right side] */
+export const JOINT_TRIPLES: Record<Signal, [[number, number, number], [number, number, number]] | null> = {
+  elbow: [[LS, LE, LW], [RS, RE, RW]],
+  knee: [[LH, LK, LA], [RH, RK, RA]],
+  hip: [[LS, LH, LK], [RS, RH, RK]],
+  shoulder: [[LH, LS, LE], [RH, RS, RE]],
+  rise: null,
+};
+
+/** the side the camera sees better, for drawing an angle */
+export function visibleTriple(f: Frame, sig: Signal): [number, number, number] | null {
+  const t = JOINT_TRIPLES[sig];
+  if (!t) return null;
+  const v = (tr: [number, number, number]) => Math.min(...tr.map((i) => f.vis[i]));
+  return v(t[0]) >= v(t[1]) ? t[0] : t[1];
 }
