@@ -1,4 +1,8 @@
-import { Check, ChevronRight, List, Plus, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
+import { Camera, Check, ChevronRight, List, Plus, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
+import { listGhosts } from '../lib/ghostdb';
+import type { Recording } from '../lib/pose';
+import { Figure } from './Figure';
+import { GhostCam } from './GhostCam';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -205,16 +209,28 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
   const isLastEx = a.exIdx >= a.order.length - 1;
   const doneTarget = mine.length >= ex.sets;
 
-  const log = () => {
+  const [cam, setCam] = useState(false);
+  const [demo, setDemo] = useState<Recording | null>(null);
+  const [demoOpen, setDemoOpen] = useState(false);
+  useEffect(() => {
+    let on = true;
+    listGhosts(ex.id).then((l) => on && setDemo(l.find((r) => r.reps.length >= 1) ?? null));
+    return () => {
+      on = false;
+    };
+  }, [ex.id, cam]);
+
+  const logWith = (w: number, r: number) => {
     unlockAudio();
     const best = bestE1rm(getState(), ex.id);
     const sessionBest = Math.max(0, ...mine.map((x) => e1rm(x.w, x.r)));
-    const cur = e1rm(vals.w, vals.r);
+    const cur = e1rm(w, r);
     setPr(best > 0 && cur > best && cur > sessionBest);
-    logSet({ exId: ex.id, w: vals.w, r: vals.r });
+    logSet({ exId: ex.id, w, r });
     thump();
     setJustLogged(true);
   };
+  const log = () => logWith(vals.w, vals.r);
 
   const another = () => {
     setJustLogged(false);
@@ -306,6 +322,57 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
           onChange={(r) => setVals((v) => ({ ...v, r }))}
         />
       </div>
+
+      {!justLogged && (
+        <div className={`ghost-row ${demo ? '' : 'solo'}`}>
+          {demo && (
+            <button className="demo-card" onClick={() => setDemoOpen(true)} aria-label="Show your form">
+              <Figure rec={demo} size={112} />
+              <span className="eyebrow">Your form</span>
+            </button>
+          )}
+          <button className="ghost-cta" onClick={() => (unlockAudio(), setCam(true))}>
+            <span className="ghost-cta-icon">
+              <Camera size={20} />
+            </span>
+            <span className="row-main">
+              <b>Ghost Set</b>
+              <small className="muted">{demo ? 'Race last time’s you — reps counted for you' : 'Camera counts reps & saves your form'}</small>
+            </span>
+            <ChevronRight size={18} className="muted" />
+          </button>
+        </div>
+      )}
+
+      <Sheet open={demoOpen && !!demo} onClose={() => setDemoOpen(false)} title="Your form">
+        {demo && (
+          <div className="stack">
+            <div className="demo-big">
+              <Figure rec={demo} size={300} />
+            </div>
+            <p className="muted small">
+              Recorded from your own Ghost Set on {new Date(demo.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ·{' '}
+              {fmtW(demo.weight)} kg × {demo.reps.length}. Only body points are stored, never video.
+            </p>
+          </div>
+        )}
+      </Sheet>
+
+      <AnimatePresence>
+        {cam && (
+          <GhostCam
+            ex={ex}
+            weight={vals.w}
+            sessionId={session.id}
+            onClose={() => setCam(false)}
+            onLog={(r) => {
+              setCam(false);
+              setVals((v) => ({ ...v, r }));
+              logWith(vals.w, r);
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       <div className="cta-zone">
         <AnimatePresence mode="wait" initial={false}>

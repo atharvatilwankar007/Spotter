@@ -31,3 +31,7 @@ keys/
 *.p12
 *.jks
 *.keystore
+
+# copied from node_modules at build time
+public/mediapipe/
+public/__test/

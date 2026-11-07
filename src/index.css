@@ -1283,3 +1283,293 @@ p {
   padding: 10px 2px;
   border-bottom: 1px solid var(--line);
 }
+
+/* ---------- Ghost Set ---------- */
+
+.ghost-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: stretch;
+}
+.ghost-row.solo {
+  grid-template-columns: 1fr;
+}
+.demo-card {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(80% 60% at 50% 100%, rgba(255, 106, 43, 0.12), transparent 70%),
+    var(--surface);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.demo-card .eyebrow {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  font-size: 9.5px;
+}
+.ghost-cta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--accent-line);
+  background: linear-gradient(120deg, var(--accent-soft), transparent 70%), var(--surface);
+  min-height: 64px;
+}
+.ghost-cta-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  flex: none;
+  box-shadow: 0 6px 18px -6px rgba(255, 106, 43, 0.8);
+}
+.ghost-cta small {
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.ghost {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+.ghost-stage {
+  position: absolute;
+  inset: 0;
+}
+.ghost-stage.mirror {
+  transform: scaleX(-1);
+}
+.ghost-stage video,
+.ghost-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ghost-stage video {
+  filter: saturate(0.35) brightness(0.62) contrast(1.05);
+}
+.ghost-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 22%, transparent 62%, rgba(0, 0, 0, 0.85)),
+    radial-gradient(120% 80% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.5));
+}
+.ghost-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(var(--safe-t) + 10px) 16px 0;
+}
+.icon-btn.glass {
+  background: rgba(20, 20, 22, 0.55);
+  backdrop-filter: blur(12px);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.ghost-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  line-height: 1.2;
+}
+.ghost-title span {
+  font-weight: 640;
+}
+.ghost-title em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-2);
+  opacity: 0.8;
+}
+.ghost-msg {
+  position: relative;
+  margin: auto 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--text-2);
+}
+.ghost-msg b {
+  font-size: 28px;
+  color: var(--text);
+  letter-spacing: -0.03em;
+}
+.race {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 18px 22px 0;
+}
+.race-you,
+.race-ghost {
+  display: flex;
+  flex-direction: column;
+}
+.race-you b {
+  font-size: 112px;
+  line-height: 0.9;
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  text-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+  transform-origin: left bottom;
+}
+.race-you span,
+.race-ghost span {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.race-ghost {
+  align-items: flex-end;
+  color: var(--accent);
+  padding-top: 14px;
+}
+.race-ghost b {
+  font-size: 54px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.05em;
+  text-shadow: 0 0 24px rgba(255, 106, 43, 0.6);
+}
+.race-ghost span {
+  color: var(--accent);
+}
+.ghost-bottom {
+  position: relative;
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 16px calc(var(--safe-b) + 18px);
+}
+.rep-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 46px;
+}
+.rep-bars i {
+  position: relative;
+  flex: 1;
+  max-width: 28px;
+  border-radius: 6px 6px 3px 3px;
+  background: rgba(243, 239, 231, 0.85);
+  transform-origin: bottom;
+}
+.rep-bars.big {
+  height: 92px;
+  margin: 6px 0 4px;
+  padding-top: 16px;
+}
+.rep-bars.big i {
+  max-width: 34px;
+  background: var(--surface-3);
+}
+.rep-bars i.slow {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+}
+.rep-bars small {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ghost-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 92dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 18px calc(var(--safe-b) + 18px);
+  background: var(--bg-2);
+  border-top: 1px solid var(--line-2);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: 0 -30px 80px rgba(0, 0, 0, 0.8);
+}
+.ghost-verdict {
+  font-size: 26px;
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+.ghost-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.ghost-stats > div {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  border-radius: var(--r);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.ghost-stats b {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+}
+.ghost-stats b.rir {
+  font-size: 18px;
+  line-height: 1.35;
+  white-space: normal;
+}
+.ghost-stats span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.ghost-tip {
+  font-size: 14px;
+  color: var(--text-2);
+  padding: 12px 14px;
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.figure {
+  display: block;
+}
+.demo-big {
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(70% 50% at 50% 90%, rgba(255, 106, 43, 0.14), transparent 70%),
+    var(--surface);
+  border: 1px solid var(--line);
+  padding: 10px 0;
+}

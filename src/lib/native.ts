@@ -70,6 +70,13 @@ export function chimeDone() {
   tone(1568, 0.32, 0.7, 0.26);
 }
 
+/** short rising blip per counted rep */
+export function chimeRep(n: number) {
+  if (!getState().settings.sound) return;
+  unlockAudio();
+  tone(520 + Math.min(n, 12) * 40, 0, 0.12, 0.16);
+}
+
 export function chimeWarn() {
   if (!getState().settings.sound) return;
   unlockAudio();
