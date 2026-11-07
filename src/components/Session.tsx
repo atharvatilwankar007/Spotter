@@ -2,6 +2,7 @@ import { Camera, Check, ChevronRight, List, Plus, RotateCcw, SkipForward, Undo2,
 import { listGhosts } from '../lib/ghostdb';
 import type { Recording } from '../lib/pose';
 import { Figure } from './Figure';
+import { ExercisePicker } from './ExercisePicker';
 import { GhostCam } from './GhostCam';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -572,7 +573,6 @@ function ExerciseList({ onPick, onAdd }: { onPick: (i: number) => void; onAdd: (
   const a = s.active!;
   const session = s.sessions.find((x) => x.id === a.sessionId)!;
   const [adding, setAdding] = useState(false);
-  const others = Object.values(s.exercises).filter((e) => !a.order.includes(e.id));
   return (
     <div className="stack">
       {a.order.map((id, i) => {
@@ -598,16 +598,8 @@ function ExerciseList({ onPick, onAdd }: { onPick: (i: number) => void; onAdd: (
         </button>
       ) : (
         <div className="stack tight">
-          <span className="eyebrow">Add after current</span>
-          {others.map((e) => (
-            <button key={e.id} className="row" onClick={() => onAdd(e.id)}>
-              <span className="row-main">
-                <b>{e.name}</b>
-                <small className="muted">{e.muscle}</small>
-              </span>
-              <Plus size={18} className="muted" />
-            </button>
-          ))}
+          <span className="eyebrow">Add after the current exercise</span>
+          <ExercisePicker exclude={a.order} onPick={onAdd} />
         </div>
       )}
     </div>

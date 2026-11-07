@@ -1,5 +1,5 @@
 // Spotter service worker: makes the app installable and open instantly / offline.
-const CACHE = 'spotter-v2';
+const CACHE = 'spotter-v3';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './manifest.webmanifest', './icon-192.png'])));

@@ -1,9 +1,25 @@
-export type Muscle = 'Chest' | 'Back' | 'Shoulders' | 'Biceps' | 'Triceps' | 'Quads' | 'Hamstrings' | 'Glutes' | 'Calves' | 'Core';
+export type Muscle =
+  | 'Chest'
+  | 'Back'
+  | 'Shoulders'
+  | 'Traps'
+  | 'Biceps'
+  | 'Triceps'
+  | 'Forearms'
+  | 'Quads'
+  | 'Hamstrings'
+  | 'Glutes'
+  | 'Adductors'
+  | 'Calves'
+  | 'Core';
+
+export type Equip = 'Barbell' | 'Dumbbell' | 'Cable' | 'Machine' | 'Smith' | 'Bodyweight' | 'Kettlebell' | 'Plate';
 
 export interface Exercise {
   id: string;
   name: string;
   muscle: Muscle;
+  equip?: Equip;
   sets: number; // target working sets
   repMin: number;
   repMax: number;

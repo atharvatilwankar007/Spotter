@@ -2,11 +2,13 @@ import { ArrowDown, ArrowUp, ChevronRight, Download, Plus, Smartphone, Trash2, U
 import { useRef, useState } from 'react';
 import { isNative } from '../lib/native';
 import { mmss } from '../lib/progress';
-import { deleteDay, exportJSON, importJSON, moveDay, saveDay, saveExercise, setSettings, uid, useStore } from '../lib/store';
+import { deleteDay, exportJSON, getState, importJSON, moveDay, saveDay, saveExercise, setSettings, uid, useStore } from '../lib/store';
 import type { Day, Exercise, Muscle } from '../lib/types';
+import { MUSCLE_ORDER } from '../lib/library';
+import { ExercisePicker } from './ExercisePicker';
 import { Sheet } from './Sheet';
 
-const MUSCLES: Muscle[] = ['Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Quads', 'Hamstrings', 'Glutes', 'Calves', 'Core'];
+const MUSCLES: Muscle[] = MUSCLE_ORDER;
 const APK_URL = 'https://github.com/atharvatilwankar007/Spotter/releases/latest/download/Spotter.apk';
 
 export function Program() {
@@ -117,7 +119,7 @@ export function Program() {
           }}
         />
       </div>
-      <p className="foot muted">Spotter v0.2 · made on a Friday</p>
+      <p className="foot muted">Spotter v0.3 · made on a Friday</p>
 
       <Sheet open={!!dayId} onClose={() => setDayId(null)}>
         {dayId && <DayEditor dayId={dayId} onClose={() => setDayId(null)} onEditEx={setExId} />}
@@ -155,9 +157,6 @@ function DayEditor({ dayId, onClose, onEditEx }: { dayId: string; onClose: () =>
     [ids[i], ids[j]] = [ids[j], ids[i]];
     upd({ exerciseIds: ids });
   };
-  const others = Object.values(s.exercises)
-    .filter((e) => !day.exerciseIds.includes(e.id))
-    .sort((a, b) => a.muscle.localeCompare(b.muscle) || a.name.localeCompare(b.name));
 
   return (
     <div className="stack">
@@ -193,30 +192,20 @@ function DayEditor({ dayId, onClose, onEditEx }: { dayId: string; onClose: () =>
         </button>
       ) : (
         <div className="stack tight">
-          <button
-            className="row accent-row"
-            onClick={() => {
-              const ex: Exercise = { id: uid(), name: 'New exercise', muscle: 'Chest', sets: 3, repMin: 8, repMax: 12, rest: 120, step: 2.5, notes: '' };
-              saveExercise(ex);
-              upd({ exerciseIds: [...day.exerciseIds, ex.id] });
-              setAdding(false);
-              onEditEx(ex.id);
-            }}
-          >
-            <Plus size={18} />
-            <span className="row-main">
-              <b>Create new exercise</b>
-            </span>
-          </button>
-          {others.map((e) => (
-            <button key={e.id} className="row" onClick={() => upd({ exerciseIds: [...day.exerciseIds, e.id] })}>
-              <span className="row-main">
-                <b>{e.name}</b>
-                <small className="muted">{e.muscle}</small>
-              </span>
-              <Plus size={18} className="muted" />
+          <div className="picker-done">
+            <span className="eyebrow">Tap to add · tap more to add several</span>
+            <button className="link-btn accent" onClick={() => setAdding(false)}>
+              Done
             </button>
-          ))}
+          </div>
+          <ExercisePicker
+            exclude={day.exerciseIds}
+            onPick={(id) => upd({ exerciseIds: [...getState().days.find((d) => d.id === day.id)!.exerciseIds, id] })}
+            onCreated={(id) => {
+              setAdding(false);
+              onEditEx(id);
+            }}
+          />
         </div>
       )}
       <button

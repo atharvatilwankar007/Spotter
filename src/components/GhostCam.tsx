@@ -1,8 +1,8 @@
-import { Check, RefreshCcw, X } from 'lucide-react';
+import { Check, Minus, Plus, RefreshCcw, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import { latestGhost, saveGhost } from '../lib/ghostdb';
-import { chimeRep, thump, unlockAudio } from '../lib/native';
+import { chimeRep, thump, tick, unlockAudio } from '../lib/native';
 import {
   analyse,
   BONES,
@@ -48,6 +48,17 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const ghost = useRef<Recording | null>(null);
   const stopRef = useRef<() => void>(() => {});
   const finishRef = useRef<() => void>(() => {});
+  // 1 = whole camera frame visible (most zoomed out). Larger = closer.
+  const zoomRef = useRef(1);
+  const [zoom, setZoomState] = useState(1);
+  const maxZoomRef = useRef(3);
+  const setZoom = (z: number) => {
+    const c = Math.min(maxZoomRef.current, Math.max(1, Math.round(z * 20) / 20));
+    zoomRef.current = c;
+    setZoomState(c);
+  };
+  const pinch = useRef<{ d: number; z: number } | null>(null);
+  const pts = useRef(new Map<number, { x: number; y: number }>());
 
   useEffect(() => {
     unlockAudio();
@@ -115,12 +126,21 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         const [lm, s] = await Promise.all([
           loadPose(),
           navigator.mediaDevices.getUserMedia({
-            video: { facingMode: facing, width: { ideal: 720 }, height: { ideal: 1280 }, frameRate: { ideal: 30 } },
+            // 4:3 = the sensor's full field of view (portrait sizes make phones crop = zoomed in)
+            video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 960 }, frameRate: { ideal: 30 } },
             audio: false,
           }),
         ]);
         if (dead) return s.getTracks().forEach((t) => t.stop());
         stream = s;
+        // if the camera has optical/digital zoom, start at its widest
+        try {
+          const track = s.getVideoTracks()[0];
+          const caps = track.getCapabilities?.() as MediaTrackCapabilities & { zoom?: { min: number } };
+          if (caps?.zoom) await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min } as MediaTrackConstraintSet] });
+        } catch {
+          /* no zoom control */
+        }
         v.srcObject = s;
         await v.play();
         startLoop(lm, v);
@@ -149,9 +169,9 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
           let ts = performance.now();
           if (ts <= lastTs) ts = lastTs + 1;
           lastTs = ts;
-          tick(ts, (ts - t0) / 1000);
+          processFrame(ts, (ts - t0) / 1000);
         };
-        const tick = (ts: number, t: number) => {
+        const processFrame = (ts: number, t: number) => {
           const res = lm.detectForVideo(v, ts);
           const c = canvas.current!;
           const ctx = c.getContext('2d')!;
@@ -164,10 +184,14 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
           }
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           ctx.clearRect(0, 0, W, Hh);
-          // same "cover" crop as the <video>
-          const sc = Math.max(W / v.videoWidth, Hh / v.videoHeight);
+          // zoom 1 = whole frame fits the screen; the <video> is sized to match exactly
+          const fit = Math.min(W / v.videoWidth, Hh / v.videoHeight);
+          maxZoomRef.current = Math.max(2, (Math.max(W / v.videoWidth, Hh / v.videoHeight) / fit) * 2);
+          const sc = fit * zoomRef.current;
           const ox = (W - v.videoWidth * sc) / 2;
           const oy = (Hh - v.videoHeight * sc) / 2;
+          v.style.width = v.videoWidth * sc + 'px';
+          v.style.height = v.videoHeight * sc + 'px';
           const map = (x: number, y: number): [number, number] => [ox + x * v.videoWidth * sc, oy + y * v.videoHeight * sc];
 
           if (!res.landmarks?.[0] || !res.worldLandmarks?.[0]) {
@@ -239,7 +263,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             v.currentTime = (i / 15) % v.duration;
             await new Promise((r) => (v.onseeked = r));
             lastTs += 67;
-            tick(lastTs, i / 15);
+            processFrame(lastTs, i / 15);
           }
         })();
       }
@@ -257,7 +281,36 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const mirrored = facing === 'user';
 
   return (
-    <motion.div className="ghost" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+    <motion.div
+      className="ghost"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      // pinch to zoom
+      onPointerDown={(e) => {
+        pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pts.current.size === 2) {
+          const [a, b] = [...pts.current.values()];
+          pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y), z: zoomRef.current };
+        }
+      }}
+      onPointerMove={(e) => {
+        if (!pts.current.has(e.pointerId)) return;
+        pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch.current && pts.current.size === 2) {
+          const [a, b] = [...pts.current.values()];
+          setZoom((pinch.current.z * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.current.d);
+        }
+      }}
+      onPointerUp={(e) => {
+        pts.current.delete(e.pointerId);
+        if (pts.current.size < 2) pinch.current = null;
+      }}
+      onPointerCancel={(e) => {
+        pts.current.delete(e.pointerId);
+        pinch.current = null;
+      }}
+    >
       <div className={`ghost-stage ${mirrored ? 'mirror' : ''}`}>
         <video ref={video} playsInline muted />
         <canvas ref={canvas} />
@@ -286,6 +339,20 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
           <RefreshCcw size={18} />
         </button>
       </header>
+
+      {(phase === 'frame' || phase === 'tracking') && (
+        <div className="zoom-ctl">
+          <button onClick={() => (tick(), setZoom(zoom + 0.25))} disabled={zoom >= maxZoomRef.current} aria-label="Zoom in">
+            <Plus size={18} />
+          </button>
+          <button className="zoom-val tnum" onClick={() => (tick(), setZoom(1))} aria-label="Fit whole camera view">
+            {zoom.toFixed(1)}×
+          </button>
+          <button onClick={() => (tick(), setZoom(zoom - 0.25))} disabled={zoom <= 1} aria-label="Zoom out">
+            <Minus size={18} />
+          </button>
+        </div>
+      )}
 
       {phase === 'loading' && <div className="ghost-msg">Waking up the spotter…</div>}
       {phase === 'frame' && (

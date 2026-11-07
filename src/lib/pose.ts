@@ -117,8 +117,10 @@ export function signals(f: Frame): Record<Signal, number | null> {
 export function priorSignal(ex: Exercise): Signal {
   const n = ex.name.toLowerCase();
   if (/calf/.test(n)) return 'rise';
-  if (/raise|fly|flye|face pull/.test(n)) return 'shoulder';
-  if (/rdl|romanian|deadlift|hinge|good morning|hip thrust|glute/.test(n)) return 'hip';
+  if (/crunch|sit-?up|leg raise|knee raise|v-up|captain|hip thrust|glute bridge|pull-through|swing|back ext|good morning|hyperext/.test(n)) return 'hip';
+  if (/shrug|plank|hold|hang|carry|twist|pallof|bug|chop|side bend|copenhagen/.test(n)) return 'hip';
+  if (/raise|fly|flye|face pull|pullover|straight-arm|y-raise/.test(n)) return 'shoulder';
+  if (/rdl|romanian|deadlift|rack pull|hinge|glute|abduction|adduction/.test(n)) return 'hip';
   if (/squat|lunge|leg press|leg ext|leg curl|hamstring curl|split/.test(n)) return 'knee';
   if (/pull-?up|chin/.test(n)) return 'elbow';
   switch (ex.muscle) {
@@ -126,6 +128,8 @@ export function priorSignal(ex: Exercise): Signal {
     case 'Hamstrings':
       return 'knee';
     case 'Glutes':
+    case 'Core':
+    case 'Adductors':
       return 'hip';
     case 'Calves':
       return 'rise';
@@ -163,7 +167,8 @@ export function bodyInFrame(f: Frame, sig: Signal) {
 /** Which end of the movement you start (and rest) at. Most lifts start with the joint open/extended. */
 export function restsHigh(ex: Exercise, sig: Signal): boolean {
   const n = ex.name.toLowerCase();
-  if (sig === 'shoulder') return false; // arms start down
+  if (sig === 'shoulder') return /pullover|straight-arm/.test(n); // raises start with arms down, pullovers start overhead
+  if (sig === 'hip' && /hip thrust|glute bridge|leg raise|knee raise|captain|v-up/.test(n)) return /leg raise|knee raise|captain|v-up/.test(n); // thrusts start bent; leg raises start straight
   if (sig === 'rise') return !/calf|pull-?up|chin|jump/.test(n); // squats start tall, calf raises start low
   if (sig === 'elbow' && /pushdown|push-down|kickback|skull|triceps ext|tricep ext|overhead ext/.test(n)) return /overhead|skull/.test(n);
   if (sig === 'knee' && /leg ext|extension/.test(n)) return false; // starts bent
