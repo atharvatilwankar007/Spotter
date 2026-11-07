@@ -1,0 +1,10 @@
+{
+  "appId": "com.atharva.spotter",
+  "appName": "Spotter",
+  "webDir": "dist",
+  "android": { "backgroundColor": "#0b0b0c" },
+  "plugins": {
+    "SystemBars": { "style": "DARK", "insetsHandling": "css" },
+    "LocalNotifications": { "smallIcon": "ic_stat_spotter", "iconColor": "#ff6a2b" }
+  }
+}

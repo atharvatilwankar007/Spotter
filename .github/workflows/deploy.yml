@@ -1,0 +1,86 @@
+# On every push to main:
+#  1. builds Spotter and publishes the web version to GitHub Pages
+#  2. builds the Android app (APK) and attaches it to a GitHub Release,
+#     downloadable at .../releases/latest/download/Spotter.apk
+name: Build & deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  pages:
+    needs: web
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync android
+      - name: Restore signing key
+        env:
+          KEY_B64: ${{ secrets.SPOTTER_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEY_B64" ]; then
+            echo "$KEY_B64" | base64 -d > "$RUNNER_TEMP/spotter.p12"
+            echo "SPOTTER_KEYSTORE_PATH=$RUNNER_TEMP/spotter.p12" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No signing key secret set: building with a throwaway debug key (updates won't install over each other)."
+          fi
+      - name: Build APK
+        env:
+          SPOTTER_KEYSTORE_PASSWORD: ${{ secrets.SPOTTER_KEYSTORE_PASSWORD }}
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk ../Spotter.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: Spotter 0.1.${{ github.run_number }}
+          body: Install Spotter.apk on your Android phone. It updates over the previous version and keeps your data.
+          files: Spotter.apk
+          make_latest: true
