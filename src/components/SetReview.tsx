@@ -1,7 +1,5 @@
-import { Pause, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { BONES, GRADE_LABEL, signals, visibleTriple, type Analysis, type Frame, type Grade, type Recording, type Signal } from '../lib/pose';
-import { drawMannequin, fitFrames } from './Figure';
+import { BONES, GRADE_LABEL, signals, visibleTriple, type Analysis, type Frame, type Recording, type Signal } from '../lib/pose';
 
 export interface Still {
   url: string; // in-memory JPEG, never saved
@@ -49,7 +47,7 @@ const torso = (f: Frame) => {
   return { hx, hy, len: Math.hypot(sx - hx, sy - hy) };
 };
 
-function StillCanvas({ still, mirrored, signal, overlay, label, width }: { still: Still; mirrored: boolean; signal: Signal; overlay?: Still; label: string; width: number }) {
+function StillCanvas({ still, mirrored, signal, overlay, label, width, ar = 4 / 3 }: { still: Still; mirrored: boolean; signal: Signal; overlay?: Still; label: string; width: number; ar?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const h = Math.round((width * still.h) / still.w);
   useEffect(() => {
@@ -110,7 +108,7 @@ function StillCanvas({ still, mirrored, signal, overlay, label, width }: { still
 
       // angle arc at the tracked joint
       const tri = visibleTriple(f, signal);
-      const ang = signals(f)[signal];
+      const ang = signals(f, ar)[signal];
       if (tri && ang != null) {
         const [ia, ib, ic] = tri;
         const bx = X(f.p[ib * 2]);
@@ -153,7 +151,7 @@ function StillCanvas({ still, mirrored, signal, overlay, label, width }: { still
       }
     };
     img.src = still.url;
-  }, [still, overlay, mirrored, signal, width, h]);
+  }, [still, overlay, mirrored, signal, width, h, ar]);
   return (
     <div className="still">
       <canvas ref={ref} style={{ width, height: h }} />
@@ -172,7 +170,7 @@ export function BestWorst({ stills, a, rec, mirrored }: { stills: (Still | null)
   if (same || !worst)
     return (
       <div className="bw">
-        <StillCanvas still={best} mirrored={mirrored} signal={rec.signal} label={`Best · rep ${a.best + 1}`} width={160} />
+        <StillCanvas still={best} mirrored={mirrored} signal={rec.signal} ar={rec.ar} label={`Best · rep ${a.best + 1}`} width={160} />
         <p className="bw-note">Every rep hit the same range. That's what consistent looks like.</p>
       </div>
     );
@@ -182,105 +180,18 @@ export function BestWorst({ stills, a, rec, mirrored }: { stills: (Still | null)
       <div className={`bw-pair ${big ? 'big' : ''}`}>
         {(!big || big === 'best') && (
           <button onClick={() => setBig(big ? null : 'best')} aria-label="Enlarge best rep">
-            <StillCanvas still={best} mirrored={mirrored} signal={rec.signal} label={`Best · rep ${a.best + 1}`} width={W} />
+            <StillCanvas still={best} mirrored={mirrored} signal={rec.signal} ar={rec.ar} label={`Best · rep ${a.best + 1}`} width={W} />
           </button>
         )}
         {(!big || big === 'worst') && (
           <button onClick={() => setBig(big ? null : 'worst')} aria-label="Enlarge shortest rep">
-            <StillCanvas still={worst} mirrored={mirrored} signal={rec.signal} overlay={best} label={`Shortest · rep ${a.worst + 1}`} width={W} />
+            <StillCanvas still={worst} mirrored={mirrored} signal={rec.signal} ar={rec.ar} overlay={best} label={`Shortest · rep ${a.worst + 1}`} width={W} />
           </button>
         )}
       </div>
       <p className="bw-note">
         Rep {a.worst + 1} reached <b>{pct}%</b> of your best rep's range. <span className="accent">Orange dashes</span> = where your best rep got to.
       </p>
-    </div>
-  );
-}
-
-/* ---------- full-set replay (collapsed by default) ---------- */
-
-export function SetReplay({ rec, grades }: { rec: Recording; grades: Grade[] }) {
-  const [open, setOpen] = useState(false);
-  const [playing, setPlaying] = useState(true);
-  const [t, setT] = useState(0);
-  const ref = useRef<HTMLCanvasElement>(null);
-  const tRef = useRef(0);
-  const playRef = useRef(true);
-  const dur = rec.frames.length ? rec.frames[rec.frames.length - 1].t : 0;
-  const size = 260;
-
-  useEffect(() => {
-    playRef.current = playing;
-  }, [playing]);
-
-  useEffect(() => {
-    if (!open || !rec.frames.length) return;
-    const c = ref.current!;
-    const dpr = Math.min(2, devicePixelRatio || 1);
-    c.width = size * dpr;
-    c.height = size * dpr;
-    const ctx = c.getContext('2d')!;
-    const fit = fitFrames(rec.frames, size);
-    let last = performance.now();
-    let raf = 0;
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      const dt = (now - last) / 1000;
-      last = now;
-      if (playRef.current) {
-        tRef.current = (tRef.current + dt) % (dur + 0.5);
-        setT(tRef.current);
-      }
-      const f = rec.frames.find((x) => x.t >= tRef.current) ?? rec.frames[rec.frames.length - 1];
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, size, size);
-      drawMannequin(ctx, f, size, 0.5 + Math.sin(now / 2400) * 0.35, fit);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [open, rec, dur]);
-
-  if (!rec.frames.length) return null;
-  if (!open)
-    return (
-      <button className="btn-ghost" onClick={() => setOpen(true)}>
-        <Play size={16} /> Replay the whole set
-      </button>
-    );
-
-  const curRep = rec.reps.findIndex((r) => t >= r.t0 && t <= r.t1);
-  const scrub = (e: React.PointerEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    tRef.current = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur;
-    setT(tRef.current);
-  };
-
-  return (
-    <div className="replay">
-      <div className="replay-stage">
-        <canvas ref={ref} style={{ width: size, height: size }} />
-        <span className="replay-rep tnum">{curRep >= 0 ? `Rep ${curRep + 1}` : ''}</span>
-      </div>
-      <div className="replay-ctl">
-        <button className="icon-btn" onClick={() => setPlaying(!playing)} aria-label={playing ? 'Pause' : 'Play'}>
-          {playing ? <Pause size={18} /> : <Play size={18} />}
-        </button>
-        <div
-          className="timeline"
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setPlaying(false);
-            scrub(e);
-          }}
-          onPointerMove={(e) => e.buttons && scrub(e)}
-        >
-          {rec.reps.map((r, i) => (
-            <i key={i} className={grades[i]} style={{ left: `${(r.t0 / dur) * 100}%`, width: `${((r.t1 - r.t0) / dur) * 100}%` }} />
-          ))}
-          <b style={{ left: `${(Math.min(t, dur) / dur) * 100}%` }} />
-        </div>
-      </div>
     </div>
   );
 }

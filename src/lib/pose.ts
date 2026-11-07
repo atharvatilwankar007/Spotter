@@ -21,7 +21,7 @@ export interface Frame {
 export interface RepStat {
   t0: number;
   t1: number;
-  rom: number; // range of motion in signal units (degrees, or % torso for "rise")
+  rom: number; // range of motion in signal units (degrees, or % for "rise"/"spread")
   dur: number; // seconds
 }
 
@@ -34,6 +34,8 @@ export interface Recording {
   signal: Signal;
   reps: RepStat[];
   frames: Frame[];
+  ar?: number; // camera aspect ratio (width / height)
+  side?: Side;
 }
 
 /* ---------- loading the model (once) ---------- */
@@ -43,99 +45,173 @@ export function loadPose(): Promise<PoseLandmarker> {
   loading ??= (async () => {
     const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision');
     const files = await FilesetResolver.forVisionTasks(new URL('./mediapipe', location.href).href.replace(/\/$/, ''));
-    const make = (delegate: 'GPU' | 'CPU') =>
+    // "full" is steadier on elbows and knees than "lite"; fall back if this phone can't run it
+    const make = (model: string, delegate: 'GPU' | 'CPU') =>
       PoseLandmarker.createFromOptions(files, {
-        baseOptions: { modelAssetPath: new URL('./models/pose_landmarker_lite.task', location.href).href, delegate },
+        baseOptions: { modelAssetPath: new URL(`./models/${model}`, location.href).href, delegate },
         runningMode: 'VIDEO',
         numPoses: 1,
         minPoseDetectionConfidence: 0.5,
         minPosePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
       });
-    try {
-      return await make('GPU');
-    } catch {
-      return await make('CPU');
+    for (const [m, d] of [
+      ['pose_landmarker_full.task', 'GPU'],
+      ['pose_landmarker_lite.task', 'GPU'],
+      ['pose_landmarker_lite.task', 'CPU'],
+    ] as const) {
+      try {
+        return await make(m, d);
+      } catch {
+        /* try the next one */
+      }
     }
+    throw new Error('pose model failed to load');
   })();
   loading.catch(() => (loading = null));
   return loading;
 }
 
-/* ---------- geometry ---------- */
+/* ---------- exercise profiles: which joint, where you start, how to place the phone ---------- */
 
-type V3 = [number, number, number];
-const w3 = (f: Frame, i: number): V3 => [f.w[i * 3], f.w[i * 3 + 1], f.w[i * 3 + 2]];
-function angle(a: V3, b: V3, c: V3) {
-  const u = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-  const v = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
-  const d = Math.hypot(...u) * Math.hypot(...v);
-  if (!d) return null;
-  const cos = (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / d;
-  return (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
-}
+export type Signal = 'elbow' | 'knee' | 'hip' | 'shoulder' | 'rise' | 'spread';
+export type Side = 'L' | 'R' | 'both';
+export type View = 'side' | 'front' | 'angle';
 
-export type Signal = 'elbow' | 'knee' | 'hip' | 'shoulder' | 'rise';
 export const SIGNAL_LABEL: Record<Signal, string> = {
   elbow: 'elbow angle',
   knee: 'knee angle',
-  hip: 'hip hinge',
+  hip: 'hip angle',
   shoulder: 'arm raise',
   rise: 'body height',
+  spread: 'hand spread',
 };
-const SIGNALS: Signal[] = ['elbow', 'knee', 'hip', 'shoulder', 'rise'];
-const MIN_ROM: Record<Signal, number> = { elbow: 28, knee: 28, hip: 22, shoulder: 25, rise: 12 };
 
-/** joint angle, using whichever side the camera sees better (or both, averaged) */
-function sided(f: Frame, l: [number, number, number], r: [number, number, number]) {
-  const visL = Math.min(...l.map((i) => f.vis[i]));
-  const visR = Math.min(...r.map((i) => f.vis[i]));
-  const aL = visL > 0.35 ? angle(w3(f, l[0]), w3(f, l[1]), w3(f, l[2])) : null;
-  const aR = visR > 0.35 ? angle(w3(f, r[0]), w3(f, r[1]), w3(f, r[2])) : null;
-  if (aL != null && aR != null) return Math.abs(visL - visR) < 0.25 ? (aL + aR) / 2 : visL > visR ? aL : aR;
-  return aL ?? aR;
+export interface Profile {
+  track: boolean; // can the camera count this one at all?
+  signal: Signal;
+  restHigh: boolean; // do you start with the joint open (true) or closed (false)?
+  rom: number; // a typical full rep's travel, in signal units
+  view: View;
+  beta?: boolean; // harder to see (lying, machines in the way)
+  hint: string; // phone placement in plain words
+  /** extra geometric proof that the far end of a real rep was reached (y grows downward) */
+  farCheck?: (f: Frame) => boolean;
 }
 
-export function signals(f: Frame): Record<Signal, number | null> {
-  // "rise": hip height above ankles, as % of torso length, from image coords (y grows downward)
-  const torso = Math.hypot(
-    (f.p[LS * 2] + f.p[RS * 2]) / 2 - (f.p[LH * 2] + f.p[RH * 2]) / 2,
-    (f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2,
-  );
-  const hipY = (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2;
-  const shY = (f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2;
-  return {
-    elbow: sided(f, [LS, LE, LW], [RS, RE, RW]),
-    knee: sided(f, [LH, LK, LA], [RH, RK, RA]),
-    hip: sided(f, [LS, LH, LK], [RS, RH, RK]),
-    shoulder: sided(f, [LH, LS, LE], [RH, RS, RE]),
-    rise: torso > 0.02 ? ((1 - (hipY + shY) / 2) / torso) * 100 : null,
-  };
-}
+const y = (f: Frame, i: number) => f.p[i * 2 + 1];
+const seen = (f: Frame, i: number) => f.vis[i] > 0.4;
+const torsoLen = (f: Frame) => Math.abs((y(f, LS) + y(f, RS)) / 2 - (y(f, LH) + y(f, RH)) / 2) || 0.2;
+/** hands pressed above the shoulders */
+const wristsOverhead = (f: Frame) => [[LW, LS], [RW, RS]].some(([w, s]) => seen(f, w) && y(f, w) < y(f, s) - torsoLen(f) * 0.15);
+/** wrist curled up above the elbow */
+const wristAboveElbow = (f: Frame) => [[LW, LE], [RW, RE]].some(([w, e]) => seen(f, w) && seen(f, e) && y(f, w) < y(f, e));
+/** hands raised to about shoulder height */
+const handsAtShoulder = (f: Frame) => [[LW, LS], [RW, RS]].some(([w, s]) => seen(f, w) && y(f, w) < y(f, s) + torsoLen(f) * 0.25);
 
-/** best guess of which joint matters for an exercise; the counter can still switch if another moves more */
-export function priorSignal(ex: Exercise): Signal {
+const SIDE_HINT = 'Stand side-on to the phone, about 2–3 m away, phone at hip height.';
+const FRONT_HINT = 'Face the phone, about 2–3 m away, phone at chest height.';
+const ANGLE_HINT = 'Put the phone at a 45° angle, level with the bench, about 2 m away.';
+
+type Rule = [RegExp, Omit<Profile, 'hint' | 'track'> & { track?: boolean }];
+const RULES: Rule[] = [
+  [/plank|hold|hang|carry|bug|pallof|chop|twist|side bend|copenhagen|shrug|wrist curl|abduction|adduction/, { track: false, signal: 'hip', restHigh: true, rom: 0, view: 'side' }],
+  [/calf/, { signal: 'rise', restHigh: false, rom: 10, view: 'side' }],
+  [/leg raise|knee raise|captain|v-up/, { signal: 'hip', restHigh: true, rom: 60, view: 'side' }],
+  [/crunch|sit-?up/, { signal: 'hip', restHigh: true, rom: 25, view: 'side' }],
+  [/hip thrust|glute bridge/, { signal: 'hip', restHigh: false, rom: 45, view: 'side' }],
+  [/rack pull/, { signal: 'hip', restHigh: false, rom: 35, view: 'side' }],
+  // from the floor: you start bent over the bar
+  [/^(?!.*(romanian|stiff|single-leg)).*deadlift/, { signal: 'hip', restHigh: false, rom: 70, view: 'side' }],
+  [/rdl|romanian|deadlift|good morning|back ext|pull-through|swing|stiff/, { signal: 'hip', restHigh: true, rom: 55, view: 'side' }],
+  [/leg ext/, { signal: 'knee', restHigh: false, rom: 60, view: 'side', beta: true }],
+  [/lying leg curl/, { signal: 'knee', restHigh: true, rom: 60, view: 'side', beta: true }],
+  [/leg curl|nordic|glute-ham/, { signal: 'knee', restHigh: true, rom: 60, view: 'side', beta: true }],
+  [/squat|lunge|leg press|split|step-up|hack|pendulum|belt/, { signal: 'knee', restHigh: true, rom: 65, view: 'side' }],
+  [/rear delt|reverse pec|face pull/, { signal: 'spread', restHigh: false, rom: 80, view: 'front' }],
+  [/fly|pec deck|crossover/, { signal: 'spread', restHigh: true, rom: 90, view: 'front' }],
+  [/pullover|straight-arm/, { signal: 'shoulder', restHigh: true, rom: 60, view: 'side' }],
+  [/lateral|y-raise|upright row/, { signal: 'shoulder', restHigh: false, rom: 55, view: 'front', farCheck: handsAtShoulder }],
+  [/front raise/, { signal: 'shoulder', restHigh: false, rom: 60, view: 'side' }],
+  [/overhead press|shoulder press|military|push press|arnold|seated barbell press|landmine press|ohp/, { signal: 'elbow', restHigh: false, rom: 65, view: 'front', farCheck: wristsOverhead }],
+  [/machine chest press|incline machine press|machine.*press/, { signal: 'elbow', restHigh: false, rom: 55, view: 'side', beta: true }],
+  [/push-?up|dip/, { signal: 'elbow', restHigh: true, rom: 55, view: 'side' }],
+  [/bench|incline|decline|press|jm press/, { signal: 'elbow', restHigh: true, rom: 55, view: 'angle', beta: true }],
+  [/row|pulldown|pull-?up|chin|inverted/, { signal: 'elbow', restHigh: true, rom: 60, view: 'side' }],
+  [/pushdown|push-down|kickback|machine triceps/, { signal: 'elbow', restHigh: false, rom: 55, view: 'side' }],
+  [/skull|extension|ext\b/, { signal: 'elbow', restHigh: true, rom: 60, view: 'side' }],
+  [/curl/, { signal: 'elbow', restHigh: true, rom: 85, view: 'side', farCheck: wristAboveElbow }],
+];
+
+export function profileFor(ex: Exercise): Profile {
   const n = ex.name.toLowerCase();
-  if (/calf/.test(n)) return 'rise';
-  if (/crunch|sit-?up|leg raise|knee raise|v-up|captain|hip thrust|glute bridge|pull-through|swing|back ext|good morning|hyperext/.test(n)) return 'hip';
-  if (/shrug|plank|hold|hang|carry|twist|pallof|bug|chop|side bend|copenhagen/.test(n)) return 'hip';
-  if (/raise|fly|flye|face pull|pullover|straight-arm|y-raise/.test(n)) return 'shoulder';
-  if (/rdl|romanian|deadlift|rack pull|hinge|glute|abduction|adduction/.test(n)) return 'hip';
-  if (/squat|lunge|leg press|leg ext|leg curl|hamstring curl|split/.test(n)) return 'knee';
-  if (/pull-?up|chin/.test(n)) return 'elbow';
-  switch (ex.muscle) {
-    case 'Quads':
-    case 'Hamstrings':
-      return 'knee';
-    case 'Glutes':
-    case 'Core':
-    case 'Adductors':
-      return 'hip';
-    case 'Calves':
-      return 'rise';
-    default:
-      return 'elbow';
+  // any shoulder press (standing, seated, dumbbell, machine…) starts at the shoulders and presses up
+  if (ex.muscle === 'Shoulders' && /press/.test(n)) return { track: true, signal: 'elbow', restHigh: false, rom: 65, view: 'front', hint: FRONT_HINT, farCheck: wristsOverhead };
+  for (const [re, p] of RULES)
+    if (re.test(n)) return { track: true, ...p, hint: p.view === 'side' ? SIDE_HINT : p.view === 'front' ? FRONT_HINT : ANGLE_HINT };
+  // custom exercises: best guess from the muscle
+  const by: Partial<Record<Exercise['muscle'], Signal>> = { Quads: 'knee', Hamstrings: 'hip', Glutes: 'hip', Core: 'hip', Calves: 'rise' };
+  const signal = by[ex.muscle] ?? 'elbow';
+  return { track: true, signal, restHigh: signal !== 'rise', rom: signal === 'rise' ? 10 : 50, view: 'side', hint: SIDE_HINT };
+}
+
+/* ---------- geometry (2D, in the camera's image, corrected for aspect ratio) ---------- */
+
+const TRIPLES: Record<'elbow' | 'knee' | 'hip' | 'shoulder', [[number, number, number], [number, number, number]]> = {
+  elbow: [[LS, LE, LW], [RS, RE, RW]],
+  knee: [[LH, LK, LA], [RH, RK, RA]],
+  hip: [[LS, LH, LK], [RS, RH, RK]],
+  shoulder: [[LH, LS, LE], [RH, RS, RE]],
+};
+
+function angle2(f: Frame, ar: number, [a, b, c]: [number, number, number]) {
+  const ux = (f.p[a * 2] - f.p[b * 2]) * ar;
+  const uy = f.p[a * 2 + 1] - f.p[b * 2 + 1];
+  const vx = (f.p[c * 2] - f.p[b * 2]) * ar;
+  const vy = f.p[c * 2 + 1] - f.p[b * 2 + 1];
+  const d = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+  if (!d) return null;
+  return (Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / d))) * 180) / Math.PI;
+}
+
+const minVis = (f: Frame, t: number[]) => Math.min(...t.map((i) => f.vis[i]));
+
+/** which side of the body the camera sees better for a signal */
+export function betterSide(f: Frame, sig: Signal): Side {
+  if (sig === 'rise' || sig === 'spread') return 'both';
+  const [l, r] = TRIPLES[sig];
+  return minVis(f, l) >= minVis(f, r) ? 'L' : 'R';
+}
+
+/** the signal value for one frame, or null if the camera can't see it clearly */
+export function readSignal(f: Frame, sig: Signal, ar: number, side: Side): number | null {
+  if (sig === 'rise') {
+    const hipY = (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2;
+    const shY = (f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2;
+    const torso = Math.abs(hipY - shY);
+    if (torso < 0.03 || minVis(f, [LS, RS, LH, RH]) < 0.4) return null;
+    return ((1 - (hipY + shY) / 2) / torso) * 100;
   }
+  if (sig === 'spread') {
+    if (minVis(f, [LW, RW, LS, RS]) < 0.4) return null;
+    const sw = Math.abs(f.p[LS * 2] - f.p[RS * 2]) * ar;
+    if (sw < 0.02) return null;
+    return (Math.abs(f.p[LW * 2] - f.p[RW * 2]) * ar * 100) / sw;
+  }
+  const [l, r] = TRIPLES[sig];
+  const read = (t: [number, number, number]) => (minVis(f, t) >= 0.5 ? angle2(f, ar, t) : null);
+  if (side === 'L') return read(l);
+  if (side === 'R') return read(r);
+  const a = read(l);
+  const b = read(r);
+  return a != null && b != null ? (a + b) / 2 : (a ?? b);
+}
+
+/** all signals, best side, for display (e.g. the angle drawn on a still) */
+export function signals(f: Frame, ar = 4 / 3): Record<Signal, number | null> {
+  const out = {} as Record<Signal, number | null>;
+  for (const s of ['elbow', 'knee', 'hip', 'shoulder', 'rise', 'spread'] as Signal[]) out[s] = readSignal(f, s, ar, betterSide(f, s));
+  return out;
 }
 
 export function frameFromResult(
@@ -155,119 +231,218 @@ export function frameFromResult(
   return { t: Math.round(t * 1000) / 1000, p, w, vis };
 }
 
-/** is the whole body (or at least the joints we need) in frame? */
-export function bodyInFrame(f: Frame, sig: Signal) {
+/* ---------- setup check: is the phone placed right? ---------- */
+
+export interface SetupCheck {
+  visible: boolean; // the joints we need are in frame and clear
+  distance: 'ok' | 'closer' | 'back';
+  view: 'ok' | 'turn-side' | 'turn-front';
+  facing: View; // what the camera currently sees
+}
+
+export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   const need =
-    sig === 'elbow' || sig === 'shoulder' ? [LS, RS, LE, RE, LW, RW, LH, RH] : sig === 'rise' ? [LS, RS, LH, RH] : [LS, RS, LH, RH, LK, RK, LA, RA];
-  return need.filter((i) => f.vis[i] > 0.5).length >= need.length / 2 + 1;
+    prof.signal === 'elbow' || prof.signal === 'shoulder' || prof.signal === 'spread'
+      ? [LS, RS, LE, RE, LW, RW, LH, RH]
+      : prof.signal === 'rise'
+        ? [LS, RS, LH, RH, LA, RA]
+        : [LS, RS, LH, RH, LK, RK, LA, RA];
+  // for side views one side may be hidden behind the body: need either side clearly
+  const sideOk = (idx: number[]) => idx.filter((i) => f.vis[i] > 0.5 && f.p[i * 2] > 0.02 && f.p[i * 2] < 0.98 && f.p[i * 2 + 1] > 0.02 && f.p[i * 2 + 1] < 0.98).length;
+  const left = need.filter((i) => [LS, LE, LW, LH, LK, LA].includes(i));
+  const right = need.filter((i) => [RS, RE, RW, RH, RK, RA].includes(i));
+  const visible = prof.view === 'front' ? sideOk(need) >= need.length - 1 : Math.max(sideOk(left), sideOk(right)) >= left.length - 1;
+
+  // how big the body is in the frame (shoulder to hip, as a share of frame height)
+  const torso = Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2);
+  const distance = torso > 0.42 ? 'back' : torso < 0.09 ? 'closer' : 'ok';
+
+  // facing: how wide the shoulders look vs how deep (world coords)
+  const dx = f.w[RS * 3] - f.w[LS * 3];
+  const dz = f.w[RS * 3 + 2] - f.w[LS * 3 + 2];
+  const r = Math.abs(dx) / (Math.hypot(dx, dz) || 1);
+  const facing: View = r > 0.78 ? 'front' : r < 0.5 ? 'side' : 'angle';
+  const view =
+    prof.view === 'side' ? (facing === 'front' ? 'turn-side' : 'ok') : prof.view === 'front' ? (facing === 'side' ? 'turn-front' : 'ok') : 'ok';
+  void ar;
+  return { visible, distance, view, facing };
 }
 
 /* ---------- rep counter ---------- */
 
-/** Which end of the movement you start (and rest) at. Most lifts start with the joint open/extended. */
-export function restsHigh(ex: Exercise, sig: Signal): boolean {
-  const n = ex.name.toLowerCase();
-  if (sig === 'shoulder') return /pullover|straight-arm/.test(n); // raises start with arms down, pullovers start overhead
-  if (sig === 'hip' && /hip thrust|glute bridge|leg raise|knee raise|captain|v-up/.test(n)) return /leg raise|knee raise|captain|v-up/.test(n); // thrusts start bent; leg raises start straight
-  if (sig === 'rise') return !/calf|pull-?up|chin|jump/.test(n); // squats start tall, calf raises start low
-  if (sig === 'elbow' && /pushdown|push-down|kickback|skull|triceps ext|tricep ext|overhead ext/.test(n)) return /overhead|skull/.test(n);
-  if (sig === 'knee' && /leg ext|extension/.test(n)) return false; // starts bent
-  return true;
+/** One-Euro filter: removes jitter when still, stays responsive when moving */
+class OneEuro {
+  private x: number | null = null;
+  private dx = 0;
+  private t = 0;
+  private minCutoff: number;
+  private beta: number;
+  constructor(minCutoff = 1.4, beta = 0.02) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+  }
+  filter(v: number, t: number) {
+    if (this.x == null) {
+      this.x = v;
+      this.t = t;
+      return v;
+    }
+    const dt = Math.max(1e-3, t - this.t);
+    this.t = t;
+    const a = (fc: number) => 1 / (1 + 1 / (2 * Math.PI * fc * dt));
+    const d = (v - this.x) / dt;
+    this.dx += a(1) * (d - this.dx);
+    const fc = this.minCutoff + this.beta * Math.abs(this.dx);
+    this.x += a(fc) * (v - this.x);
+    return this.x;
+  }
 }
 
-const WINDOW = 10; // seconds of history used to learn your range of motion
-
+/**
+ * Counts reps from one joint signal.
+ * - armed only once you hold the start position (no counting while you set up or walk in)
+ * - a rep = leave the start, travel a real share of your range, come back
+ * - must take a realistic time, so jitter can't count twice
+ */
 export class RepCounter {
-  signal: Signal;
+  readonly signal: Signal;
+  readonly side: Side;
+  readonly ar: number;
   reps: RepStat[] = [];
   lastMoveT = 0;
   firstRepStart: number | null = null;
   value: number | null = null;
   progress = 0;
-  private ema: Partial<Record<Signal, number>> = {};
-  private hist: { t: number; v: Record<Signal, number | null> }[] = [];
-  private phase: 'rest' | 'out' = 'rest';
+  armed = false;
+  private f = new OneEuro();
+  private raw: number[] = [];
+  private farCheck?: (f: Frame) => boolean;
+  private farOk = false;
+  private dir: number; // +1 if the far end of the rep is a bigger value
+  private base = 0; // the start position value
+  private learned: number; // typical travel of your reps
+  private minTravel: number;
+  private phase: 'rest' | 'out' | 'back' = 'rest';
+  private backPeak = 0;
+  private reverseChecked = false;
   private leaveT = 0;
-  private repMin = Infinity;
-  private repMax = -Infinity;
-  private restHigh: (s: Signal) => boolean;
+  private peak = 0;
+  private lastRepT = -9;
+  private holdSince = 0;
+  private holdVal = 0;
+  private prevV: number | null = null;
+  private prevT = 0;
 
-  constructor(prior: Signal, restHigh: (s: Signal) => boolean = () => true) {
-    this.signal = prior;
-    this.restHigh = restHigh;
+  constructor(prof: Profile, side: Side, ar: number) {
+    this.signal = prof.signal;
+    this.side = side;
+    this.ar = ar;
+    this.dir = prof.restHigh ? -1 : 1;
+    this.farCheck = prof.farCheck;
+    this.learned = prof.rom * 0.8;
+    this.minTravel = Math.max(prof.signal === 'rise' ? 4 : 12, prof.rom * 0.35);
   }
 
-  private range(s: Signal, since = 0) {
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const h of this.hist) {
-      const v = h.v[s];
-      if (v == null || h.t < since) continue;
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-    return { lo, hi, span: hi - lo };
+  /** end of set: if you stopped (or hit Done) on the way back from a real rep, count it */
+  flush(t: number): RepStat | null {
+    if (this.phase !== 'out' || !this.farOk || this.peak < Math.max(this.minTravel, this.learned * 0.6) || t - this.leaveT < 0.45) return null;
+    this.phase = 'rest';
+    this.firstRepStart ??= this.leaveT;
+    const rep: RepStat = { t0: this.leaveT, t1: t, rom: this.peak, dur: t - this.leaveT };
+    this.reps.push(rep);
+    return rep;
   }
 
   /** returns a RepStat when a rep completes */
-  push(t: number, raw: Record<Signal, number | null>): RepStat | null {
-    for (const s of SIGNALS) {
-      const v = raw[s];
-      if (v == null) continue;
-      const e = this.ema[s];
-      this.ema[s] = e == null ? v : e + (v - e) * 0.5;
-    }
-    this.hist.push({ t, v: { ...(this.ema as Record<Signal, number | null>) } });
-    while (this.hist.length && t - this.hist[0].t > WINDOW) this.hist.shift();
+  push(t: number, f: Frame): RepStat | null {
+    const r0 = readSignal(f, this.signal, this.ar, this.side);
+    if (r0 == null) return null; // can't see the joint clearly: skip, don't guess
+    // median of the last 3 readings: a single glitch frame can't make a rep
+    this.raw.push(r0);
+    if (this.raw.length > 3) this.raw.shift();
+    const raw = [...this.raw].sort((a, b) => a - b)[Math.floor(this.raw.length / 2)];
+    const v = this.f.filter(raw, t);
+    this.value = v;
+    if (this.prevV != null && Math.abs(v - this.prevV) / Math.max(1e-3, t - this.prevT) > this.minTravel * 0.25) this.lastMoveT = t;
+    this.prevV = v;
+    this.prevT = t;
 
-    // before the first rep, switch to whichever joint is clearly moving the most
-    if (!this.reps.length && this.phase === 'rest' && t > 1.2) {
-      const score = (s: Signal) => this.range(s, t - 5).span / MIN_ROM[s];
-      const cur = score(this.signal);
-      let best = this.signal;
-      // only abandon the expected joint if it is barely moving while another clearly is
-      if (cur < 1) for (const s of SIGNALS) if (score(s) > 2.2 && score(s) > score(best)) best = s;
-      this.signal = best;
-    }
-
-    const v = this.ema[this.signal];
-    this.value = v ?? null;
-    if (v == null) return null;
-
-    const back = this.hist.length > 3 ? this.hist[this.hist.length - 4].v[this.signal] : null;
-    if (back != null && Math.abs(v - back) > MIN_ROM[this.signal] * 0.1) this.lastMoveT = t;
-
-    const { lo, span } = this.range(this.signal);
-    if (span < MIN_ROM[this.signal]) {
-      this.progress = 0;
-      this.leaveT = t;
+    // 1. arm: hold still for 0.6 s; that position is your start
+    if (!this.armed) {
+      if (!this.holdSince || Math.abs(v - this.holdVal) > this.minTravel * 0.35) {
+        this.holdSince = t;
+        this.holdVal = v;
+      } else if (t - this.holdSince > 0.45) {
+        this.armed = true;
+        this.base = this.holdVal;
+        this.leaveT = t;
+      }
       return null;
     }
-    // r = 1 at the start/rest position, 0 at the far end of the rep
-    const q = (v - lo) / span;
-    const r = this.restHigh(this.signal) ? q : 1 - q;
-    this.progress = Math.max(0, Math.min(1, 1 - r));
+
+    const travel = (v - this.base) * this.dir; // > 0 = moving toward the far end
+    this.progress = Math.max(0, Math.min(1, travel / this.learned));
+
+    // locked on at the far end of a rep (e.g. top of a press): the way back is the end of rep 1
+    if (this.phase === 'rest' && !this.reverseChecked && !this.reps.length && travel < -Math.max(this.minTravel, this.learned * 0.45)) {
+      this.phase = 'back';
+      this.backPeak = -travel;
+      this.farOk = !this.farCheck || this.farCheck(f);
+    }
+    if (this.phase === 'back') {
+      this.backPeak = Math.max(this.backPeak, -travel);
+      // done when you pause at the start position, or turn around for the next rep
+      const done = t - this.lastMoveT > 0.25 || -travel < this.backPeak - Math.max(this.minTravel * 0.5, this.backPeak * 0.15);
+      if (done && (t - this.leaveT < 0.45 || this.backPeak < Math.max(this.minTravel, this.learned * 0.5) || !this.farOk)) {
+        // too quick or too small to be a real rep (a tracking glitch): just treat this as the start position
+        this.reverseChecked = true;
+        this.phase = 'rest';
+        this.base = v;
+        this.leaveT = t;
+        return null;
+      }
+      if (done) {
+        this.reverseChecked = true;
+        this.phase = 'rest';
+        this.base = v;
+        const rep: RepStat = { t0: this.leaveT, t1: t, rom: this.backPeak, dur: t - this.leaveT };
+        this.firstRepStart ??= this.leaveT;
+        this.learned = Math.max(this.backPeak, this.learned * 0.6);
+        this.reps.push(rep);
+        this.lastRepT = t;
+        this.leaveT = t;
+        return rep;
+      }
+      return null;
+    }
+    if (travel > this.learned * 0.45) this.reverseChecked = true;
 
     if (this.phase === 'rest') {
-      if (r > 0.82) {
-        this.leaveT = t;
-        this.repMin = v;
-        this.repMax = v;
-      }
-      if (r < 0.38) {
+      if (travel < 0) this.base += (v - this.base) * 0.3; // went past the start (e.g. fuller lockout): that's the new start
+      else if (travel < this.learned * 0.12) this.base += (v - this.base) * 0.02; // slow drift while resting
+      if (travel < this.learned * 0.15) this.leaveT = t;
+      if (travel > Math.max(this.minTravel * 0.6, this.learned * 0.45) && t - this.lastRepT > 0.3) {
         this.phase = 'out';
-        this.firstRepStart ??= this.leaveT;
+        this.peak = travel;
+        this.farOk = !this.farCheck;
       }
+      return null;
     }
-    this.repMin = Math.min(this.repMin, v);
-    this.repMax = Math.max(this.repMax, v);
-    if (this.phase === 'out' && r > 0.7) {
+
+    // phase 'out'
+    if (travel > this.peak) this.peak = travel;
+    if (!this.farOk && this.farCheck?.(f)) this.farOk = true;
+    if (travel < this.peak * 0.3) {
       this.phase = 'rest';
-      const rep: RepStat = { t0: this.leaveT, t1: t, rom: this.repMax - this.repMin, dur: t - this.leaveT };
+      const dur = t - this.leaveT;
+      const ok = dur >= 0.45 && dur <= 15 && this.peak >= Math.max(this.minTravel, this.learned * 0.5) && this.farOk;
+      if (!ok) return null; // a twitch or a half-rep: ignore
+      this.firstRepStart ??= this.leaveT;
+      this.learned = this.reps.length ? this.learned * 0.7 + this.peak * 0.3 : Math.max(this.peak, this.learned * 0.6);
+      const rep: RepStat = { t0: this.leaveT, t1: t, rom: this.peak, dur };
       this.reps.push(rep);
+      this.lastRepT = t;
       this.leaveT = t;
-      this.repMin = v;
-      this.repMax = v;
       return rep;
     }
     return null;
@@ -364,11 +539,9 @@ export function analyse(rec: { reps: RepStat[]; weight: number; signal: Signal }
 
 /** the three joints that make the angle for each signal, as KP indices [left side, right side] */
 export const JOINT_TRIPLES: Record<Signal, [[number, number, number], [number, number, number]] | null> = {
-  elbow: [[LS, LE, LW], [RS, RE, RW]],
-  knee: [[LH, LK, LA], [RH, RK, RA]],
-  hip: [[LS, LH, LK], [RS, RH, RK]],
-  shoulder: [[LH, LS, LE], [RH, RS, RE]],
+  ...TRIPLES,
   rise: null,
+  spread: null,
 };
 
 /** the side the camera sees better, for drawing an angle */

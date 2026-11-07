@@ -5,26 +5,26 @@ import { latestGhost, saveGhost } from '../lib/ghostdb';
 import { chimeRep, thump, tick, unlockAudio } from '../lib/native';
 import {
   analyse,
+  betterSide,
   BONES,
-  bodyInFrame,
+  checkSetup,
   frameFromResult,
   HEAD,
   loadPose,
-  priorSignal,
+  profileFor,
   RepCounter,
-  restsHigh,
-  signals,
   SIGNAL_LABEL,
   type Analysis,
   type Frame,
   type Recording,
+  type SetupCheck,
 } from '../lib/pose';
 import { fmtW } from '../lib/progress';
-import { BestWorst, RepStrip, SetReplay, type Still } from './SetReview';
+import { BestWorst, RepStrip, type Still } from './SetReview';
 import { uid } from '../lib/store';
 import type { Exercise } from '../lib/types';
 
-type Phase = 'loading' | 'frame' | 'tracking' | 'summary' | 'error';
+type Phase = 'loading' | 'setup' | 'tracking' | 'summary' | 'error';
 const spring = { type: 'spring', stiffness: 380, damping: 32 } as const;
 
 interface Props {
@@ -44,7 +44,12 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const [reps, setReps] = useState(0);
   const [ghostReps, setGhostReps] = useState<number | null>(null);
   const [bars, setBars] = useState<number[]>([]);
-  const [sig, setSig] = useState(priorSignal(ex));
+  const prof = profileFor(ex);
+  const [checks, setChecks] = useState<SetupCheck | null>(null);
+  const [armed, setArmed] = useState(false);
+  const [canSkip, setCanSkip] = useState(false);
+  const skipRef = useRef(false);
+  const [logReps, setLogReps] = useState(0);
   const [result, setResult] = useState<{ rec: Recording; a: Analysis; stills: (Still | null)[] } | null>(null);
   const ghost = useRef<Recording | null>(null);
   const stopRef = useRef<() => void>(() => {});
@@ -73,13 +78,16 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     let stream: MediaStream | null = null;
     let raf = 0;
     let dead = false;
-    const counter = new RepCounter(priorSignal(ex), (s) => restsHigh(ex, s));
+    let counter: RepCounter | null = null;
+    let ar = 4 / 3;
+    let okSince = 0;
+    let setupStart = 0;
+    let lastChecks = '';
+    let lastT = 0;
     const frames: Frame[] = [];
     let t0 = 0;
     let lastRec = -1;
     let lastTs = 0;
-    let started = false;
-    let inFrameSince = 0;
     let anchorLive: { x: number; y: number; s: number } | null = null;
     // deepest moment of each rep, kept in memory only for the summary (never saved)
     const stills: (Still | null)[] = [];
@@ -90,15 +98,18 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       dead = true;
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((t) => t.stop());
+      if (counter && counter.flush(counter.value != null ? lastT : 0)) stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : null);
       const rec: Recording = {
         id: uid(),
         exId: ex.id,
         sessionId,
         at: Date.now(),
         weight,
-        signal: counter.signal,
-        reps: counter.reps,
-        frames: frames.filter((f) => f.t >= Math.max(0, (counter.firstRepStart ?? 0) - 1.2)),
+        signal: prof.signal,
+        reps: counter?.reps ?? [],
+        frames: frames.filter((f) => f.t >= Math.max(0, (counter?.firstRepStart ?? 0) - 1.2)),
+        ar,
+        side: counter?.side,
       };
       // re-base time so the recording starts just before the first rep
       const shift = rec.frames[0]?.t ?? 0;
@@ -106,11 +117,9 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       rec.reps = rec.reps.map((r) => ({ ...r, t0: r.t0 - shift, t1: r.t1 - shift }));
       // dev only: pretend later reps were shallower, to preview the grading + overlay
       if (import.meta.env.DEV && location.search.includes('testshallow')) rec.reps = rec.reps.map((r, i) => ({ ...r, rom: r.rom * (i >= 3 ? 0.82 - (i - 3) * 0.05 : 1) }));
-      setResult({
-        rec,
-        a: analyse(rec, ghost.current),
-        stills: stills.map((x) => x),
-      });
+      const a = analyse(rec, ghost.current);
+      setLogReps(a.reps);
+      setResult({ rec, a, stills: stills.map((x) => x) });
       setPhase('summary');
     };
     finishRef.current = finish;
@@ -128,7 +137,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         if (testVideo) {
           const lm0 = await loadPose();
           v.src = testVideo;
-          (window as unknown as { __counter: RepCounter }).__counter = counter;
           await new Promise((r) => (v.onloadeddata = r));
           lastTs = performance.now() + 1e6;
           return startLoop(lm0, v, true);
@@ -169,8 +177,9 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
 
     function startLoop(lm: Awaited<ReturnType<typeof loadPose>>, v: HTMLVideoElement, step = false) {
       {
-        setPhase('frame');
+        setPhase('setup');
         t0 = performance.now();
+        ar = v.videoWidth / v.videoHeight || 4 / 3;
 
         const loop = () => {
           if (dead) return;
@@ -205,21 +214,33 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
           const map = (x: number, y: number): [number, number] => [ox + x * v.videoWidth * sc, oy + y * v.videoHeight * sc];
 
           if (!res.landmarks?.[0] || !res.worldLandmarks?.[0]) {
-            inFrameSince = 0;
+            okSince = 0;
             return;
           }
           const f = frameFromResult(res.landmarks[0], res.worldLandmarks[0], t);
+          lastT = t;
 
-          if (!started) {
-            if (bodyInFrame(f, counter.signal)) {
-              inFrameSince ||= t;
-              if (t - inFrameSince > 0.8) {
-                started = true;
+          if (!counter) {
+            // guided setup: right angle, whole body visible, right distance — then counting can start
+            setupStart ||= t;
+            if (t - setupStart > 6) setCanSkip(true);
+            const chk = checkSetup(f, prof, ar);
+            const key = JSON.stringify(chk);
+            if (key !== lastChecks) {
+              lastChecks = key;
+              setChecks(chk);
+            }
+            const good = chk.visible && chk.distance === 'ok' && chk.view === 'ok';
+            if (good || skipRef.current) {
+              okSince ||= t;
+              if (t - okSince > 0.8 || skipRef.current) {
+                counter = new RepCounter(prof, betterSide(f, prof.signal), ar);
+                if (import.meta.env.DEV) (window as unknown as { __counter: RepCounter }).__counter = counter;
                 setPhase('tracking');
                 thump();
               }
-            } else inFrameSince = 0;
-            drawSkeleton(ctx, f.p, map, 'rgba(243,239,231,0.55)', 3, f.vis);
+            } else okSince = 0;
+            drawSkeleton(ctx, f.p, map, good ? 'rgba(183,243,107,0.9)' : 'rgba(243,239,231,0.55)', 3, f.vis);
             return;
           }
 
@@ -227,7 +248,8 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             frames.push(f);
             lastRec = t;
           }
-          const rep = counter.push(t, signals(f));
+          const rep = counter.push(t, f);
+          if (counter.armed) setArmed(true);
           if (counter.progress > Math.max(0.5, cand?.prog ?? 0)) {
             const cv = cand?.cv ?? document.createElement('canvas');
             cv.width = 360;
@@ -239,7 +261,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : null);
             cand = null;
           }
-          setSig(counter.signal);
           if (rep) {
             chimeRep(counter.reps.length);
             thump();
@@ -345,7 +366,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         <div className="ghost-title">
           <span>{ex.name}</span>
           <em>
-            {fmtW(weight)} kg · tracking {SIGNAL_LABEL[sig]}
+            {fmtW(weight)} kg · tracking {SIGNAL_LABEL[prof.signal]}
           </em>
         </div>
         <button
@@ -361,7 +382,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         </button>
       </header>
 
-      {(phase === 'frame' || phase === 'tracking') && (
+      {(phase === 'setup' || phase === 'tracking') && (
         <div className="zoom-ctl">
           <button onClick={() => (tick(), setZoom(zoom + 0.25))} disabled={zoom >= maxZoomRef.current} aria-label="Zoom in">
             <Plus size={18} />
@@ -376,10 +397,11 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       )}
 
       {phase === 'loading' && <div className="ghost-msg">Waking up the spotter…</div>}
-      {phase === 'frame' && (
-        <div className="ghost-msg">
-          <b>Step back</b>
-          <span>Prop the phone up and fit your whole body in the frame</span>
+      {phase === 'setup' && <SetupPanel prof={prof} checks={checks} canSkip={canSkip} onSkip={() => (skipRef.current = true)} />}
+      {phase === 'tracking' && !armed && (
+        <div className="ghost-hint">
+          <b>Get into your start position</b>
+          <span>Hold still for a second — counting starts automatically</span>
         </div>
       )}
       {phase === 'error' && (
@@ -432,23 +454,31 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
               </span>
             </div>
             {result.a.tip && <p className="ghost-tip">{result.a.tip}</p>}
-            {result.a.reps > 0 && <SetReplay rec={result.rec} grades={result.a.grades} />}
             <div className="stack">
-              {result.a.reps > 0 ? (
-                <button
-                  className="btn-primary big"
-                  onClick={() => {
-                    saveGhost(result.rec);
-                    onLog(result.a.reps);
-                  }}
-                >
-                  <Check size={22} /> Log {fmtW(weight)} kg × {result.a.reps}
-                </button>
-              ) : (
-                <p className="muted small">No reps were picked up. Make sure your whole body is in frame, side-on works best.</p>
-              )}
+              <div className="fix-count">
+                <span className="muted small">{logReps === result.a.reps ? 'Count looks wrong? Fix it' : `Counted ${result.a.reps}, you set ${logReps}`}</span>
+                <div className="fix-btns">
+                  <button className="icon-btn" onClick={() => (tick(), setLogReps(Math.max(0, logReps - 1)))} aria-label="One rep fewer">
+                    <Minus size={18} />
+                  </button>
+                  <b className="tnum">{logReps}</b>
+                  <button className="icon-btn" onClick={() => (tick(), setLogReps(logReps + 1))} aria-label="One rep more">
+                    <Plus size={18} />
+                  </button>
+                </div>
+              </div>
+              <button
+                className="btn-primary big"
+                disabled={logReps === 0}
+                onClick={() => {
+                  if (result.a.reps > 0) saveGhost(result.rec);
+                  onLog(logReps);
+                }}
+              >
+                <Check size={22} /> Log {fmtW(weight)} kg × {logReps}
+              </button>
               <button className="btn-ghost" onClick={close}>
-                {result.a.reps > 0 ? 'Discard, log by hand' : 'Close'}
+                Discard, log by hand
               </button>
             </div>
           </motion.div>
@@ -508,4 +538,67 @@ export function drawSkeleton(
     }
   }
   ctx.restore();
+}
+
+const VIEW_LABEL = { side: 'Side-on', front: 'Facing the phone', angle: '45° angle' } as const;
+
+function SetupPanel({ prof, checks, canSkip, onSkip }: { prof: ReturnType<typeof profileFor>; checks: SetupCheck | null; canSkip: boolean; onSkip: () => void }) {
+  const items: { ok: boolean; label: string; fix: string }[] = [
+    { ok: !!checks?.visible, label: 'Whole body in frame', fix: 'Step back or tilt the phone until your arms and legs are all in view' },
+    {
+      ok: checks?.distance === 'ok',
+      label: 'Good distance',
+      fix: checks?.distance === 'back' ? 'Too close — step back' : 'Too far — come a bit closer',
+    },
+    {
+      ok: checks?.view === 'ok',
+      label: VIEW_LABEL[prof.view],
+      fix: checks?.view === 'turn-side' ? 'Turn 90° so your side faces the phone' : 'Turn to face the phone',
+    },
+  ];
+  return (
+    <div className="setup">
+      <div className="setup-card">
+        <div className="setup-top">
+          <ViewDiagram view={prof.view} />
+          <div>
+            <span className="eyebrow accent">Set up · {VIEW_LABEL[prof.view]}{prof.beta ? ' · beta' : ''}</span>
+            <p>{prof.hint}</p>
+          </div>
+        </div>
+        <ul className="setup-list">
+          {items.map((it) => (
+            <li key={it.label} className={it.ok ? 'ok' : ''}>
+              <i>{it.ok ? <Check size={13} strokeWidth={3} /> : null}</i>
+              <span>
+                <b>{it.label}</b>
+                {!it.ok && checks && <small>{it.fix}</small>}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {canSkip && (
+          <button className="link-btn" onClick={onSkip}>
+            Start anyway
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** top-down sketch: where the phone goes relative to you */
+function ViewDiagram({ view }: { view: 'side' | 'front' | 'angle' }) {
+  const rot = view === 'side' ? 90 : view === 'angle' ? 45 : 0;
+  return (
+    <svg className="view-diagram" viewBox="0 0 64 64" aria-hidden>
+      <rect x="27" y="47" width="10" height="14" rx="2.5" fill="none" stroke="var(--accent)" strokeWidth="2" />
+      <path d="M32 46 L24 33 M32 46 L40 33" stroke="var(--accent)" strokeWidth="1.2" strokeDasharray="2 2" opacity="0.7" />
+      <g transform={`rotate(${rot} 32 18)`}>
+        <ellipse cx="32" cy="18" rx="11" ry="6" fill="var(--surface-3)" stroke="var(--text)" strokeWidth="1.6" />
+        <circle cx="32" cy="18" r="4" fill="var(--text)" />
+        <path d="M32 24.5 l-3 3 h6 z" fill="var(--text)" />
+      </g>
+    </svg>
+  );
 }

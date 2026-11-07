@@ -1896,3 +1896,126 @@ p {
   background: var(--text);
   box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
 }
+
+/* ---------- Ghost Set setup ---------- */
+.setup {
+  position: relative;
+  margin-top: auto;
+  padding: 0 14px calc(var(--safe-b) + 18px);
+}
+.setup-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--r-xl);
+  background: rgba(16, 16, 18, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line-2);
+}
+.setup-top {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.setup-top p {
+  font-size: 14px;
+  color: var(--text-2);
+  margin-top: 4px;
+  line-height: 1.35;
+}
+.view-diagram {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+.setup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup-list li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.setup-list i {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--faint);
+  flex: none;
+  margin-top: 1px;
+  transition: all 0.25s var(--ease);
+}
+.setup-list li.ok i {
+  background: var(--good);
+  border-color: var(--good);
+  color: #0b1203;
+}
+.setup-list span {
+  display: flex;
+  flex-direction: column;
+}
+.setup-list b {
+  font-weight: 600;
+  font-size: 14.5px;
+}
+.setup-list li:not(.ok) b {
+  color: var(--text-2);
+}
+.setup-list small {
+  font-size: 12.5px;
+  color: var(--accent-2);
+}
+.ghost-hint {
+  position: relative;
+  margin: auto 24px;
+  padding: 14px 16px;
+  border-radius: var(--r-lg);
+  background: rgba(16, 16, 18, 0.75);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+.ghost-hint b {
+  font-size: 18px;
+}
+.ghost-hint span {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.fix-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--r);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.fix-btns {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.fix-btns b {
+  font-size: 22px;
+  min-width: 26px;
+  text-align: center;
+  font-weight: 650;
+}
+.ghost-cta:disabled {
+  opacity: 0.45;
+}

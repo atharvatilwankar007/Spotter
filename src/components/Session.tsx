@@ -1,6 +1,6 @@
 import { Camera, Check, ChevronRight, List, Plus, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
 import { listGhosts } from '../lib/ghostdb';
-import type { Recording } from '../lib/pose';
+import { profileFor, type Recording } from '../lib/pose';
 import { Figure } from './Figure';
 import { ExercisePicker } from './ExercisePicker';
 import { GhostCam } from './GhostCam';
@@ -213,6 +213,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
   const [cam, setCam] = useState(false);
   const [demo, setDemo] = useState<Recording | null>(null);
   const [demoOpen, setDemoOpen] = useState(false);
+  const trackable = profileFor(ex).track;
   useEffect(() => {
     let on = true;
     listGhosts(ex.id).then((l) => on && setDemo(l.find((r) => r.reps.length >= 1) ?? null));
@@ -332,13 +333,15 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
               <span className="eyebrow">Your form</span>
             </button>
           )}
-          <button className="ghost-cta" onClick={() => (unlockAudio(), setCam(true))}>
+          <button className="ghost-cta" onClick={() => (unlockAudio(), setCam(true))} disabled={!trackable}>
             <span className="ghost-cta-icon">
               <Camera size={20} />
             </span>
             <span className="row-main">
               <b>Ghost Set</b>
-              <small className="muted">{demo ? 'Race last time’s you — reps counted for you' : 'Camera counts reps & saves your form'}</small>
+              <small className="muted">
+                {!trackable ? 'Not available for holds & small movements' : demo ? 'Race last time’s you — reps counted for you' : 'Camera counts reps & saves your form'}
+              </small>
             </span>
             <ChevronRight size={18} className="muted" />
           </button>

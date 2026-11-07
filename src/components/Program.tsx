@@ -119,7 +119,7 @@ export function Program() {
           }}
         />
       </div>
-      <p className="foot muted">Spotter v0.4 · made on a Friday</p>
+      <p className="foot muted">Spotter v0.5 · made on a Friday</p>
 
       <Sheet open={!!dayId} onClose={() => setDayId(null)}>
         {dayId && <DayEditor dayId={dayId} onClose={() => setDayId(null)} onEditEx={setExId} />}
