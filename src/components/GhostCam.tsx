@@ -1,6 +1,6 @@
-import { Check, Minus, Plus, RefreshCcw, X } from 'lucide-react';
+import { Check, ChevronDown, Minus, Plus, RefreshCcw, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { latestGhost, saveGhost } from '../lib/ghostdb';
 import { chimeRep, thump, tick, unlockAudio } from '../lib/native';
 import {
@@ -20,8 +20,10 @@ import {
   type SetupCheck,
 } from '../lib/pose';
 import { fmtW } from '../lib/progress';
-import { BestWorst, RepStrip, type Still } from './SetReview';
-import { uid } from '../lib/store';
+import { BestWorst, RepStrip, ScoreParts, SetScore, type Still } from './SetReview';
+import { rateSet } from '../lib/rating';
+import { lastSets } from '../lib/progress';
+import { getState, uid } from '../lib/store';
 import type { Exercise } from '../lib/types';
 
 type Phase = 'loading' | 'setup' | 'tracking' | 'summary' | 'error';
@@ -50,6 +52,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const [canSkip, setCanSkip] = useState(false);
   const skipRef = useRef(false);
   const [logReps, setLogReps] = useState(0);
+  const [detail, setDetail] = useState(false);
   const [result, setResult] = useState<{ rec: Recording; a: Analysis; stills: (Still | null)[] } | null>(null);
   const ghost = useRef<Recording | null>(null);
   const stopRef = useRef<() => void>(() => {});
@@ -320,6 +323,13 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   };
 
   const maxBar = Math.max(...bars, 0.001);
+  const rating = useMemo(
+    () =>
+      result
+        ? rateSet({ a: result.a, reps: result.rec.reps, count: logReps, weight, ex, last: lastSets(getState(), ex.id, sessionId)?.sets })
+        : null,
+    [result, logReps, weight, ex, sessionId],
+  );
   const mirrored = facing === 'user';
 
   return (
@@ -443,17 +453,35 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       <AnimatePresence>
         {phase === 'summary' && result && (
           <motion.div className="ghost-sheet" initial={{ y: '100%' }} animate={{ y: 0 }} transition={spring}>
-            <span className="eyebrow accent">Ghost Set · {result.a.reps} reps</span>
-            <h2 className="ghost-verdict">{result.a.verdict}</h2>
-            {result.a.reps > 0 && <RepStrip a={result.a} />}
-            <BestWorst stills={result.stills} a={result.a} rec={result.rec} mirrored={mirrored} />
-            <div className="ghost-facts tnum">
-              {result.a.vsLine && <span>{result.a.vsLine}</span>}
-              <span>
-                Effort (est.): <b>{result.a.rir}</b>
-              </span>
-            </div>
-            {result.a.tip && <p className="ghost-tip">{result.a.tip}</p>}
+            <SetScore rating={rating!} reps={logReps} />
+            <button className="detail-toggle" onClick={() => (tick(), setDetail(!detail))} aria-expanded={detail}>
+              Detailed review <ChevronDown size={16} className={detail ? 'flip' : ''} />
+            </button>
+            <AnimatePresence initial={false}>
+              {detail && (
+                <motion.div
+                  className="detail"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.28, ease: [0.2, 0.8, 0.2, 1] }}
+                >
+                  <div className="detail-in">
+                    <ScoreParts rating={rating!} />
+                    <p className="detail-verdict">{result.a.verdict}</p>
+                    {result.a.reps > 0 && <RepStrip a={result.a} />}
+                    <BestWorst stills={result.stills} a={result.a} rec={result.rec} mirrored={mirrored} />
+                    <div className="ghost-facts tnum">
+                      {result.a.vsLine && <span>{result.a.vsLine}</span>}
+                      <span>
+                        Effort (est.): <b>{result.a.rir}</b>
+                      </span>
+                    </div>
+                    {result.a.tip && <p className="ghost-tip">{result.a.tip}</p>}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
             <div className="stack">
               <div className="fix-count">
                 <span className="muted small">{logReps === result.a.reps ? 'Count looks wrong? Fix it' : `Counted ${result.a.reps}, you set ${logReps}`}</span>

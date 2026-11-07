@@ -1,3 +1,5 @@
+import { motion } from 'motion/react';
+import type { Rating } from '../lib/rating';
 import { useEffect, useRef, useState } from 'react';
 import { BONES, GRADE_LABEL, signals, visibleTriple, type Analysis, type Frame, type Recording, type Signal } from '../lib/pose';
 
@@ -192,6 +194,70 @@ export function BestWorst({ stills, a, rec, mirrored }: { stills: (Still | null)
       <p className="bw-note">
         Rep {a.worst + 1} reached <b>{pct}%</b> of your best rep's range. <span className="accent">Orange dashes</span> = where your best rep got to.
       </p>
+    </div>
+  );
+}
+
+/* ---------- the set rating (the summary's hero) ---------- */
+
+export function SetScore({ rating, reps }: { rating: Rating; reps: number }) {
+  const R = 46;
+  const C = 2 * Math.PI * R;
+  return (
+    <div className={`score ${rating.tone}`}>
+      <div className="score-ring">
+        <svg viewBox="0 0 110 110">
+          <defs>
+            <linearGradient id="scoreg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="var(--accent-2)" />
+              <stop offset="1" stopColor="var(--accent)" />
+            </linearGradient>
+          </defs>
+          <circle cx="55" cy="55" r={R} className="score-track" />
+          <motion.circle
+            cx="55"
+            cy="55"
+            r={R}
+            className="score-bar"
+            stroke="url(#scoreg)"
+            strokeDasharray={C}
+            initial={{ strokeDashoffset: C }}
+            animate={{ strokeDashoffset: C * (1 - rating.score / 10) }}
+            transition={{ duration: 1.1, ease: [0.2, 0.8, 0.2, 1], delay: 0.15 }}
+            transform="rotate(-90 55 55)"
+          />
+        </svg>
+        <div className="score-num tnum">
+          <b>{rating.score.toFixed(1)}</b>
+          <span>/ 10</span>
+        </div>
+      </div>
+      <div className="score-text">
+        <span className="eyebrow accent">
+          {rating.label} · {reps} reps
+        </span>
+        <h2>{rating.headline}</h2>
+      </div>
+      <div className="score-next">
+        <span className="eyebrow">Next set</span>
+        <p>{rating.next}</p>
+      </div>
+    </div>
+  );
+}
+
+export function ScoreParts({ rating }: { rating: Rating }) {
+  return (
+    <div className="score-parts">
+      {rating.parts.map((p) => (
+        <div key={p.key} className="score-part">
+          <span>{p.label}</span>
+          <i>
+            <motion.b initial={{ scaleX: 0 }} animate={{ scaleX: p.value }} transition={{ duration: 0.6, ease: [0.2, 0.8, 0.2, 1] }} />
+          </i>
+          <em className="tnum">{Math.round(p.value * 10)}</em>
+        </div>
+      ))}
     </div>
   );
 }

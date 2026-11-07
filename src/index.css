@@ -2019,3 +2019,143 @@ p {
 .ghost-cta:disabled {
   opacity: 0.45;
 }
+
+/* ---------- set rating ---------- */
+.score {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px 16px;
+  align-items: center;
+}
+.score-ring {
+  position: relative;
+  width: 112px;
+  height: 112px;
+}
+.score-ring svg {
+  width: 100%;
+  height: 100%;
+}
+.score-track {
+  fill: none;
+  stroke: var(--surface-3);
+  stroke-width: 9;
+}
+.score-bar {
+  fill: none;
+  stroke-width: 9;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 8px rgba(255, 106, 43, 0.5));
+}
+.score.great .score-bar,
+.score.good .score-bar {
+  filter: drop-shadow(0 0 10px rgba(255, 140, 50, 0.7));
+}
+.score-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.score-num b {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+.score-num span {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.score-text h2 {
+  font-size: 21px;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  margin-top: 4px;
+}
+.score-next {
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+  border-radius: var(--r);
+  background: linear-gradient(120deg, var(--accent-soft), transparent 75%), var(--surface);
+  border: 1px solid var(--accent-line);
+}
+.score-next p {
+  font-size: 15px;
+  font-weight: 560;
+  margin-top: 3px;
+  line-height: 1.35;
+}
+.detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 560;
+}
+.detail-toggle svg {
+  transition: transform 0.25s var(--ease);
+}
+.detail-toggle svg.flip {
+  transform: rotate(180deg);
+}
+.detail {
+  overflow: hidden;
+}
+.detail-in {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 6px;
+}
+.detail-verdict {
+  font-size: 15px;
+  font-weight: 600;
+}
+.score-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.score-part {
+  display: grid;
+  grid-template-columns: 1fr 90px 22px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.score-part i {
+  height: 6px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.score-part i b {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transform-origin: left;
+}
+.score-part em {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--text);
+  text-align: right;
+}
+.score-text {
+  min-width: 0;
+}
+.ghost-sheet {
+  overflow-x: hidden;
+}
+.ghost-sheet > * {
+  min-width: 0;
+  max-width: 100%;
+}
