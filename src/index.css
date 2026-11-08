@@ -1614,8 +1614,8 @@ p {
   color: var(--accent);
   height: 30px;
 }
-.ghost {
-  touch-action: none;
+.ghost-stage {
+  touch-action: none; /* pinch to zoom on the camera only, so the summary can still scroll */
 }
 
 /* ---------- exercise picker ---------- */
@@ -2158,4 +2158,21 @@ p {
 .ghost-sheet > * {
   min-width: 0;
   max-width: 100%;
+}
+
+/* the summary scrolls: nothing inside may be squashed to fit the screen */
+.ghost-sheet {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.ghost-sheet > * {
+  flex-shrink: 0;
+}
+
+.detail-in {
+  animation: detail-in 0.25s var(--ease) both;
+}
+@keyframes detail-in {
+  from { opacity: 0; transform: translateY(-6px); }
 }

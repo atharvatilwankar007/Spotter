@@ -1,7 +1,5 @@
 import { Camera, Check, ChevronRight, List, Plus, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
-import { listGhosts } from '../lib/ghostdb';
-import { profileFor, type Recording } from '../lib/pose';
-import { Figure } from './Figure';
+import { profileFor } from '../lib/pose';
 import { ExercisePicker } from './ExercisePicker';
 import { GhostCam } from './GhostCam';
 import { AnimatePresence, motion } from 'motion/react';
@@ -211,16 +209,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
   const doneTarget = mine.length >= ex.sets;
 
   const [cam, setCam] = useState(false);
-  const [demo, setDemo] = useState<Recording | null>(null);
-  const [demoOpen, setDemoOpen] = useState(false);
   const trackable = profileFor(ex).track;
-  useEffect(() => {
-    let on = true;
-    listGhosts(ex.id).then((l) => on && setDemo(l.find((r) => r.reps.length >= 1) ?? null));
-    return () => {
-      on = false;
-    };
-  }, [ex.id, cam]);
 
   const logWith = (w: number, r: number) => {
     unlockAudio();
@@ -326,13 +315,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
       </div>
 
       {!justLogged && (
-        <div className={`ghost-row ${demo ? '' : 'solo'}`}>
-          {demo && (
-            <button className="demo-card" onClick={() => setDemoOpen(true)} aria-label="Show your form">
-              <Figure rec={demo} size={112} />
-              <span className="eyebrow">Your form</span>
-            </button>
-          )}
+        <div className="ghost-row solo">
           <button className="ghost-cta" onClick={() => (unlockAudio(), setCam(true))} disabled={!trackable}>
             <span className="ghost-cta-icon">
               <Camera size={20} />
@@ -340,27 +323,13 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
             <span className="row-main">
               <b>Ghost Set</b>
               <small className="muted">
-                {!trackable ? 'Not available for holds & small movements' : demo ? 'Race last time’s you — reps counted for you' : 'Camera counts reps & saves your form'}
+                {!trackable ? 'Not available for holds & small movements' : 'Camera counts your reps and rates the set'}
               </small>
             </span>
             <ChevronRight size={18} className="muted" />
           </button>
         </div>
       )}
-
-      <Sheet open={demoOpen && !!demo} onClose={() => setDemoOpen(false)} title="Your form">
-        {demo && (
-          <div className="stack">
-            <div className="demo-big">
-              <Figure rec={demo} size={300} />
-            </div>
-            <p className="muted small">
-              Recorded from your own Ghost Set on {new Date(demo.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ·{' '}
-              {fmtW(demo.weight)} kg × {demo.reps.length}. Only body points are stored, never video.
-            </p>
-          </div>
-        )}
-      </Sheet>
 
       <AnimatePresence>
         {cam && (

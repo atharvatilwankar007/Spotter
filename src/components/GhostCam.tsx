@@ -44,7 +44,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const [err, setErr] = useState('');
   const [facing, setFacing] = useState<'user' | 'environment'>('user');
   const [reps, setReps] = useState(0);
-  const [ghostReps, setGhostReps] = useState<number | null>(null);
   const [bars, setBars] = useState<number[]>([]);
   const prof = profileFor(ex);
   const [checks, setChecks] = useState<SetupCheck | null>(null);
@@ -73,7 +72,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     unlockAudio();
     latestGhost(ex.id, sessionId).then((g) => {
       ghost.current = g;
-      if (g) setGhostReps(0);
     });
   }, [ex.id, sessionId]);
 
@@ -91,7 +89,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     let t0 = 0;
     let lastRec = -1;
     let lastTs = 0;
-    let anchorLive: { x: number; y: number; s: number } | null = null;
     // deepest moment of each rep, kept in memory only for the summary (never saved)
     const stills: (Still | null)[] = [];
     let cand: { cv: HTMLCanvasElement; frame: Frame; prog: number } | null = null;
@@ -279,27 +276,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             setBars(counter.reps.map((r) => r.dur));
           }
 
-          // where the live body is (to place the ghost)
-          const hipX = (f.p[7 * 2] + f.p[8 * 2]) / 2;
-          const hipY = (f.p[7 * 2 + 1] + f.p[8 * 2 + 1]) / 2;
-          const torso = Math.hypot((f.p[1 * 2] + f.p[2 * 2]) / 2 - hipX, (f.p[1 * 2 + 1] + f.p[2 * 2 + 1]) / 2 - hipY);
-          anchorLive ??= { x: hipX, y: hipY, s: torso };
-
-          // ghost: last time's set, time-aligned to your first rep
-          const g = ghost.current;
-          if (g && counter.firstRepStart != null && g.frames.length) {
-            const gStart = g.reps[0]?.t0 ?? 0;
-            const gt = t - counter.firstRepStart + gStart;
-            const gf = g.frames.find((x) => x.t >= gt) ?? g.frames[g.frames.length - 1];
-            const g0 = g.frames[0];
-            const gHipX = (g0.p[7 * 2] + g0.p[8 * 2]) / 2;
-            const gHipY = (g0.p[7 * 2 + 1] + g0.p[8 * 2 + 1]) / 2;
-            const gTorso = Math.hypot((g0.p[1 * 2] + g0.p[2 * 2]) / 2 - gHipX, (g0.p[1 * 2 + 1] + g0.p[2 * 2 + 1]) / 2 - gHipY);
-            const k = gTorso > 0.01 ? anchorLive.s / gTorso : 1;
-            const pts = gf.p.map((val, i) => (i % 2 ? anchorLive!.y + (val - gHipY) * k : anchorLive!.x + (val - gHipX) * k));
-            drawSkeleton(ctx, pts, map, 'rgba(255,106,43,0.42)', 7, gf.vis, true);
-            setGhostReps(g.reps.filter((r) => r.t1 <= gt).length);
-          }
           drawSkeleton(ctx, f.p, map, 'rgba(243,239,231,0.95)', 4, f.vis);
 
           // auto-finish: a few reps done and you've been still for 4 seconds
@@ -438,12 +414,6 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
               </motion.b>
               <span>reps</span>
             </div>
-            {ghostReps != null && (
-              <div className="race-ghost">
-                <b className="tnum">{ghostReps}</b>
-                <span>ghost · {fmtW(ghost.current?.weight ?? 0)} kg</span>
-              </div>
-            )}
           </div>
           <div className="ghost-bottom">
             <div className="rep-bars">
@@ -465,15 +435,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             <button className="detail-toggle" onClick={() => (tick(), setDetail(!detail))} aria-expanded={detail}>
               Detailed review <ChevronDown size={16} className={detail ? 'flip' : ''} />
             </button>
-            <AnimatePresence initial={false}>
-              {detail && (
-                <motion.div
-                  className="detail"
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.28, ease: [0.2, 0.8, 0.2, 1] }}
-                >
+            {detail && (
                   <div className="detail-in">
                     <ScoreParts rating={rating!} />
                     <p className="detail-verdict">{result.a.verdict}</p>
@@ -487,9 +449,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
                     </div>
                     {result.a.tip && <p className="ghost-tip">{result.a.tip}</p>}
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            )}
             <div className="stack">
               <div className="fix-count">
                 <span className="muted small">{logReps === result.a.reps ? 'Count looks wrong? Fix it' : `Counted ${result.a.reps}, you set ${logReps}`}</span>
