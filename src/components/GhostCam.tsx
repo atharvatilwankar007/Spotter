@@ -95,6 +95,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     // deepest moment of each rep, kept in memory only for the summary (never saved)
     const stills: (Still | null)[] = [];
     let cand: { cv: HTMLCanvasElement; frame: Frame; prog: number } | null = null;
+    let armStill: Still | null = null; // if you lock on at the far end, this is that first rep's deepest moment
 
     const finish = () => {
       if (dead) return;
@@ -253,15 +254,22 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
           }
           const rep = counter.push(t, f);
           if (counter.armed) setArmed(true);
-          if (counter.progress > Math.max(0.5, cand?.prog ?? 0)) {
-            const cv = cand?.cv ?? document.createElement('canvas');
+          const snap = (prev?: HTMLCanvasElement) => {
+            const cv = prev ?? document.createElement('canvas');
             cv.width = 360;
             cv.height = Math.round((360 * v.videoHeight) / v.videoWidth);
             cv.getContext('2d')!.drawImage(v, 0, 0, cv.width, cv.height);
-            cand = { cv, frame: f, prog: counter.progress };
+            return cv;
+          };
+          if (counter.armed && !armStill) {
+            const cv = snap();
+            armStill = { url: cv.toDataURL('image/jpeg', 0.8), frame: f, w: cv.width, h: cv.height };
           }
+          // a twitch that never became a rep shouldn't leave its photo behind
+          if (!rep && cand && counter.depth < counter.captureFrom * 0.4) cand = null;
+          if (counter.depth > Math.max(counter.captureFrom, cand?.prog ?? 0)) cand = { cv: snap(cand?.cv), frame: f, prog: counter.depth };
           if (rep) {
-            stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : null);
+            stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : counter.reps.length === 1 ? armStill : null);
             cand = null;
           }
           if (rep) {

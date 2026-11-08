@@ -313,6 +313,8 @@ export class RepCounter {
   firstRepStart: number | null = null;
   value: number | null = null;
   progress = 0;
+  depth = 0; // unclamped travel toward the far end of the rep
+  captureFrom = Infinity; // depth worth photographing
   armed = false;
   private f = new OneEuro();
   private raw: number[] = [];
@@ -382,6 +384,8 @@ export class RepCounter {
 
     const travel = (v - this.base) * this.dir; // > 0 = moving toward the far end
     this.progress = Math.max(0, Math.min(1, travel / this.learned));
+    this.depth = travel;
+    this.captureFrom = this.learned * 0.35;
 
     // locked on at the far end of a rep (e.g. top of a press): the way back is the end of rep 1
     if (this.phase === 'rest' && !this.reverseChecked && !this.reps.length && travel < -Math.max(this.minTravel, this.learned * 0.45)) {

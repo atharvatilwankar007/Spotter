@@ -166,14 +166,14 @@ export function BestWorst({ stills, a, rec, mirrored }: { stills: (Still | null)
   const [big, setBig] = useState<'best' | 'worst' | null>(null);
   const best = stills[a.best];
   const worst = stills[a.worst];
-  if (!best || a.reps < 2) return null;
+  if (!best) return null;
   const same = a.best === a.worst || rec.reps[a.worst].rom >= rec.reps[a.best].rom * 0.95;
   const pct = Math.round((rec.reps[a.worst].rom / rec.reps[a.best].rom) * 100);
   if (same || !worst)
     return (
       <div className="bw">
         <StillCanvas still={best} mirrored={mirrored} signal={rec.signal} ar={rec.ar} label={`Best · rep ${a.best + 1}`} width={160} />
-        <p className="bw-note">Every rep hit the same range. That's what consistent looks like.</p>
+        <p className="bw-note">{a.reps === 1 ? 'Your rep at its deepest point.' : "Every rep hit the same range. That's what consistent looks like."}</p>
       </div>
     );
   const W = big ? 300 : 150;
