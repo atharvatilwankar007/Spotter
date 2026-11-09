@@ -1,7 +1,9 @@
 import { Trophy } from 'lucide-react';
 import { motion } from 'motion/react';
-import { e1rm, fmtW, lastSets, sessionPRs, volume } from '../lib/progress';
+import { diffText, loadText, shortLoad } from '../lib/load';
+import { e1rm, lastSets, sessionPRs, volume } from '../lib/progress';
 import { useStore } from '../lib/store';
+import { SessionSets } from './SetEdit';
 
 const spring = { type: 'spring', stiffness: 300, damping: 28 } as const;
 
@@ -50,7 +52,7 @@ export function Finish({ id, onClose }: { id: string; onClose: () => void }) {
               <span className="row-main">
                 <b>{s.exercises[p.exId]?.name}</b>
                 <small className="tnum">
-                  {fmtW(p.w)} kg × {p.r} · e1RM {Math.round(e1rm(p.w, p.r))}
+                  {s.exercises[p.exId] ? loadText(p.w, s.exercises[p.exId], p.u) : p.w} × {p.r}
                 </small>
               </span>
             </motion.div>
@@ -65,23 +67,27 @@ export function Finish({ id, onClose }: { id: string; onClose: () => void }) {
           const top = mine.reduce((a, b) => (e1rm(b.w, b.r) > e1rm(a.w, a.r) ? b : a));
           const prev = lastSets(s, exId, ses.id)?.sets;
           const ptop = prev?.reduce((a, b) => (e1rm(b.w, b.r) > e1rm(a.w, a.r) ? b : a));
+          const ex = s.exercises[exId];
           const diff = ptop ? e1rm(top.w, top.r) - e1rm(ptop.w, ptop.r) : null;
           return (
             <motion.div key={exId} className="cmp-row" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 + i * 0.04 }}>
               <span className="row-main">
                 <b>{s.exercises[exId]?.name}</b>
                 <small className="muted tnum">
-                  {ptop ? `${fmtW(ptop.w)}×${ptop.r} → ` : ''}
-                  {fmtW(top.w)}×{top.r}
+                  {ptop ? `${shortLoad(ptop, ex)}×${ptop.r} → ` : ''}
+                  {shortLoad(top, ex)}×{top.r}
                 </small>
               </span>
               <span className={`delta ${diff != null && diff > 0.01 ? 'up' : diff != null && diff < -0.01 ? 'down' : ''}`}>
-                {diff == null ? 'new' : Math.abs(diff) < 0.01 ? 'same' : `${diff > 0 ? '▲' : '▼'} ${Math.abs(diff).toFixed(1)} kg`}
+                {diff == null ? 'new' : Math.abs(diff) < 0.01 ? 'same' : `${diff > 0 ? '▲' : '▼'} ${ex ? diffText(diff, ex) : Math.abs(diff).toFixed(1)}`}
               </span>
             </motion.div>
           );
         })}
       </div>
+
+      <span className="eyebrow">Logged a wrong number? Tap a set to fix it</span>
+      <SessionSets sessionId={ses.id} />
 
       <button className="btn-primary big" onClick={onClose}>
         Done

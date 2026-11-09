@@ -85,6 +85,40 @@ export function undoLastSet() {
   patchActive({ phase: 'log', restEndsAt: 0 });
 }
 
+/** fix a logged set, in the current workout or any past one */
+export function updateSet(sessionId: string, t: number, p: Pick<SetLog, 'w' | 'r'>) {
+  patchSession(sessionId, (s) => ({ ...s, sets: s.sets.map((x) => (x.t === t ? { ...x, ...p } : x)) }));
+}
+
+export function deleteSet(sessionId: string, t: number) {
+  patchSession(sessionId, (s) => ({ ...s, sets: s.sets.filter((x) => x.t !== t) }));
+  // a past workout with nothing left in it goes away
+  if (state.active?.sessionId !== sessionId) set({ ...state, sessions: state.sessions.filter((s) => s.id !== sessionId || s.sets.length > 0) });
+}
+
+/** the next exercise you haven't started, wrapping around so anything you skipped comes back. -1 = none left */
+export function nextPendingIdx(): number {
+  const a = state.active;
+  const ses = state.sessions.find((s) => s.id === a?.sessionId);
+  if (!a || !ses) return -1;
+  const n = a.order.length;
+  for (let k = 1; k < n; k++) {
+    const i = (a.exIdx + k) % n;
+    if (state.exercises[a.order[i]] && !ses.sets.some((x) => x.exId === a.order[i])) return i;
+  }
+  return -1;
+}
+
+/** do a different exercise now. Keeps a running rest timer going */
+export function swapToExercise(exIdx: number) {
+  patchActive({ exIdx });
+}
+
+export function setAllSets(n: number) {
+  const exercises = Object.fromEntries(Object.entries(state.exercises).map(([id, ex]) => [id, { ...ex, sets: n }]));
+  set({ ...state, exercises, settings: { ...state.settings, defaultSets: n } });
+}
+
 export function startRest(seconds: number) {
   patchActive({ phase: 'rest', restEndsAt: Date.now() + seconds * 1000, restTotal: seconds });
 }
@@ -109,7 +143,7 @@ export function addExerciseToSession(exId: string) {
   if (!a) return;
   const order = [...a.order.filter((id) => id !== exId)];
   order.splice(a.exIdx + 1, 0, exId);
-  patchActive({ order, exIdx: a.exIdx + 1, phase: 'log', restEndsAt: 0 });
+  patchActive({ order, exIdx: a.exIdx + 1 });
 }
 
 export function finishSession(): string | null {

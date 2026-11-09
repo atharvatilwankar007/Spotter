@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, ChevronRight, Download, Plus, Smartphone, Trash2, U
 import { useRef, useState } from 'react';
 import { isNative } from '../lib/native';
 import { mmss } from '../lib/progress';
-import { deleteDay, exportJSON, getState, importJSON, moveDay, saveDay, saveExercise, setSettings, uid, useStore } from '../lib/store';
+import { deleteDay, exportJSON, getState, importJSON, moveDay, saveDay, saveExercise, setAllSets, setSettings, uid, useStore } from '../lib/store';
 import type { Day, Exercise, Muscle } from '../lib/types';
 import { MUSCLE_ORDER } from '../lib/library';
 import { ExercisePicker } from './ExercisePicker';
@@ -72,6 +72,33 @@ export function Program() {
       <div className="stack">
         <Toggle label="Rest timer sound" on={s.settings.sound} set={(v) => setSettings({ sound: v })} />
         <Toggle label="Vibration" on={s.settings.vibrate} set={(v) => setSettings({ vibrate: v })} />
+        <Toggle label="Say start / stop in Ghost Set" on={s.settings.voice !== false} set={(v) => setSettings({ voice: v })} />
+        <div className="row">
+          <span className="row-main">
+            <b>Weight unit</b>
+            <small className="muted">Default; change any exercise while logging</small>
+          </span>
+          <div className="seg-ctl">
+            {(['kg', 'lb'] as const).map((u) => (
+              <button key={u} className={(s.settings.unit ?? 'kg') === u ? 'on' : ''} onClick={() => setSettings({ unit: u })}>
+                {u}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="row">
+          <span className="row-main">
+            <b>Sets per exercise</b>
+            <small className="muted">Applies to all; fine-tune any after</small>
+          </span>
+          <div className="seg-ctl">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} className={Object.values(s.exercises).every((e) => e.sets === n) ? 'on' : ''} onClick={() => setAllSets(n)}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
         {!isNative && (
           <a className="row" href={APK_URL}>
             <Smartphone size={18} className="accent" />

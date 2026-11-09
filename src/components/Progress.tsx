@@ -1,13 +1,16 @@
 import { Trash2, TrendingDown, TrendingUp } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useState } from 'react';
-import { ago, e1rm, fmtW, series, volume } from '../lib/progress';
+import { shortLoad, toShow, unitLabel } from '../lib/load';
+import { ago, series, volume } from '../lib/progress';
 import { deleteSession, useStore } from '../lib/store';
+import { SessionSets, SetChips } from './SetEdit';
 import { Sheet } from './Sheet';
 
 export function Progress() {
   const s = useStore((x) => x);
   const [open, setOpen] = useState<string | null>(null);
+  const [workout, setWorkout] = useState<string | null>(null);
   const done = s.sessions.filter((x) => x.end);
   const ids = s.days.flatMap((d) => d.exerciseIds).filter((id, i, a) => a.indexOf(id) === i);
   const rows = ids.map((id) => ({ ex: s.exercises[id], pts: series(s, id) })).filter((r) => r.ex && r.pts.length);
@@ -64,12 +67,12 @@ export function Progress() {
               <span className="lift-main">
                 <b>{ex.name}</b>
                 <small className="muted tnum">
-                  top {fmtW(lastP.top.w)}×{lastP.top.r} · {ago(lastP.t)}
+                  top {shortLoad(lastP.top, ex)}×{lastP.top.r} · {ago(lastP.t)}
                 </small>
               </span>
               <Spark pts={pts.map((p) => p.v)} w={84} h={32} />
               <span className="lift-val tnum">
-                <b>{Math.round(lastP.v)}</b>
+                <b>{Math.round(toShow(lastP.v, ex))}</b>
                 {pts.length > 1 && (
                   <small className={ch >= 0 ? 'up' : 'down'}>
                     {ch >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
@@ -92,13 +95,13 @@ export function Progress() {
             const mins = Math.round(((ses.end ?? ses.start) - ses.start) / 60000);
             return (
               <div key={ses.id} className="hist-row">
-                <span className="row-main">
+                <button className="row-main left" onClick={() => setWorkout(ses.id)}>
                   <b>{day?.name ?? 'Workout'}</b>
                   <small className="muted tnum">
                     {new Date(ses.start).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} · {mins} min ·{' '}
                     {ses.sets.length} sets · {Math.round(volume(ses.sets)).toLocaleString()} kg
                   </small>
-                </span>
+                </button>
                 <button
                   className="icon-btn subtle"
                   aria-label="Delete workout"
@@ -114,12 +117,16 @@ export function Progress() {
       <Sheet open={!!open} onClose={() => setOpen(null)} title={open ? s.exercises[open]?.name : ''}>
         {open && <LiftDetail exId={open} />}
       </Sheet>
+      <Sheet open={!!workout} onClose={() => setWorkout(null)} title="Tap a set to fix it">
+        {workout && <SessionSets sessionId={workout} />}
+      </Sheet>
     </div>
   );
 }
 
 function LiftDetail({ exId }: { exId: string }) {
   const s = useStore((x) => x);
+  const ex = s.exercises[exId];
   const pts = series(s, exId);
   const best = pts.reduce((a, b) => (b.v > a.v ? b : a), pts[0]);
   const sessions = s.sessions.filter((x) => x.end && x.sets.some((y) => y.exId === exId)).reverse();
@@ -130,12 +137,12 @@ function LiftDetail({ exId }: { exId: string }) {
       </div>
       <div className="stat-row tnum">
         <div className="stat">
-          <b>{Math.round(best.v)}</b>
-          <span>best e1RM kg</span>
+          <b>{Math.round(toShow(best.v, ex))}</b>
+          <span>best est. {unitLabel(ex)}</span>
         </div>
         <div className="stat">
           <b>
-            {fmtW(best.top.w)}×{best.top.r}
+            {shortLoad(best.top, ex)}×{best.top.r}
           </b>
           <span>best set</span>
         </div>
@@ -148,15 +155,7 @@ function LiftDetail({ exId }: { exId: string }) {
         <div key={ses.id} className="hist-row">
           <span className="row-main">
             <small className="muted">{new Date(ses.start).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</small>
-            <span className="tnum last-sets">
-              {ses.sets
-                .filter((x) => x.exId === exId)
-                .map((x, i) => (
-                  <b key={i} className={e1rm(x.w, x.r) === best.v ? 'hl' : ''}>
-                    {fmtW(x.w)}×{x.r}
-                  </b>
-                ))}
-            </span>
+            <SetChips sessionId={ses.id} sets={ses.sets.filter((x) => x.exId === exId)} ex={ex} />
           </span>
         </div>
       ))}

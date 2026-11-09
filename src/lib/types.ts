@@ -26,7 +26,12 @@ export interface Exercise {
   rest: number; // seconds
   step: number; // weight increment, kg
   notes: string;
+  load?: LoadKind; // how you track it (default: plain weight)
+  unit?: Unit; // overrides the default unit for this exercise
 }
+
+export type LoadKind = 'weight' | 'bar' | 'holes';
+export type Unit = 'kg' | 'lb';
 
 export interface Day {
   id: string;
@@ -40,6 +45,7 @@ export interface SetLog {
   w: number;
   r: number;
   t: number; // timestamp
+  u?: 'bar' | 'holes'; // w = plates only (bar) or pin holes; absent = total kg
 }
 
 export interface Session {
@@ -62,6 +68,9 @@ export interface Active {
 export interface Settings {
   sound: boolean;
   vibrate: boolean;
+  unit?: Unit; // default weight unit
+  defaultSets?: number; // sets for newly added exercises
+  voice?: boolean; // say start / stop in Ghost Set (default on)
 }
 
 export interface State {

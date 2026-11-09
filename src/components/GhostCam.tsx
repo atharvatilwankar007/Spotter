@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Minus, Plus, RefreshCcw, X } from 'lucide-react';
+import { Check, ChevronDown, Mic, Minus, Plus, RefreshCcw, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { latestGhost, saveGhost } from '../lib/ghostdb';
@@ -10,6 +10,7 @@ import {
   checkSetup,
   frameFromResult,
   HEAD,
+  inPosition,
   loadPose,
   profileFor,
   RepCounter,
@@ -19,14 +20,16 @@ import {
   type Recording,
   type SetupCheck,
 } from '../lib/pose';
-import { fmtW } from '../lib/progress';
+import { loadText } from '../lib/load';
 import { BestWorst, RepStrip, ScoreParts, SetScore, type Still } from './SetReview';
 import { rateSet } from '../lib/rating';
 import { lastSets } from '../lib/progress';
 import { getState, uid } from '../lib/store';
+import { startVoice, type Word } from '../lib/voice';
 import type { Exercise } from '../lib/types';
 
 type Phase = 'loading' | 'setup' | 'tracking' | 'summary' | 'error';
+type VoiceState = 'off' | 'loading' | 'on' | 'failed';
 const spring = { type: 'spring', stiffness: 380, damping: 32 } as const;
 
 interface Props {
@@ -48,14 +51,28 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const prof = profileFor(ex);
   const [checks, setChecks] = useState<SetupCheck | null>(null);
   const [armed, setArmed] = useState(false);
+  const [out, setOut] = useState(false);
   const [canSkip, setCanSkip] = useState(false);
   const skipRef = useRef(false);
+  const testing = import.meta.env.DEV && location.search.includes('testvideo');
+  const testSay = import.meta.env.DEV && location.search.includes('testsay');
+  const initialVoice: VoiceState = getState().settings.voice === false || (testing && !testSay) ? 'off' : 'loading';
+  const [voice, setVoiceState] = useState<VoiceState>(initialVoice);
+  const voiceRef = useRef<VoiceState>(initialVoice);
+  const setVoice = (v: VoiceState) => {
+    voiceRef.current = v;
+    setVoiceState(v);
+  };
+  const startReq = useRef(false); // you said start (or tapped it)
+  const startedRef = useRef(false);
+  const repsRef = useRef(0);
+  const stopVoice = useRef<() => void>(() => {});
   const [logReps, setLogReps] = useState(0);
   const [detail, setDetail] = useState(false);
   const [result, setResult] = useState<{ rec: Recording; a: Analysis; stills: (Still | null)[] } | null>(null);
   const ghost = useRef<Recording | null>(null);
   const stopRef = useRef<() => void>(() => {});
-  const finishRef = useRef<() => void>(() => {});
+  const finishRef = useRef<(spoken?: boolean) => void>(() => {});
   // 1 = whole camera frame visible (most zoomed out). Larger = closer.
   const zoomRef = useRef(1);
   const [zoom, setZoomState] = useState(1);
@@ -75,7 +92,44 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     });
   }, [ex.id, sessionId]);
 
+  // listen for "start" and "stop" while the camera is open
   useEffect(() => {
+    if (voiceRef.current === 'off') return;
+    const onWord = (w: Word) => {
+      if (w === 'start' && !startedRef.current) startReq.current = true;
+      // needs a counted rep first, so a stray "stop" can't end the set before it begins
+      else if (w === 'stop' && startedRef.current && repsRef.current > 0) finishRef.current(true);
+    };
+    if (testSay) {
+      (window as unknown as { __say: (w: Word) => void }).__say = onWord;
+      setVoice('on');
+      return;
+    }
+    let gone = false;
+    let end = () => {};
+    startVoice(onWord)
+      .then((stop) => {
+        if (gone) return stop();
+        let stopped = false;
+        end = stopVoice.current = () => {
+          if (!stopped) stop();
+          stopped = true;
+        };
+        setVoice('on');
+      })
+      .catch(() => {
+        if (!gone) setVoice('failed'); // no mic or no model: counting starts on its own, as before
+      });
+    return () => {
+      gone = true;
+      end();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    startedRef.current = false;
+    startReq.current = false;
+    repsRef.current = 0;
     let stream: MediaStream | null = null;
     let raf = 0;
     let dead = false;
@@ -93,13 +147,18 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
     const stills: (Still | null)[] = [];
     let cand: { cv: HTMLCanvasElement; frame: Frame; prog: number } | null = null;
     let armStill: Still | null = null; // if you lock on at the far end, this is that first rep's deepest moment
+    let paused = false;
+    let outSince = 0;
+    let inSince = 0;
 
-    const finish = () => {
+    const finish = (spoken = false) => {
       if (dead) return;
       dead = true;
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((t) => t.stop());
-      if (counter && counter.flush(counter.value != null ? lastT : 0)) stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : null);
+      stopVoice.current();
+      // a spoken stop means the set is over: whatever you're moving now (racking the bar) isn't a rep
+      if (!spoken && counter && counter.flush(counter.value != null ? lastT : 0)) stills.push(cand ? { url: cand.cv.toDataURL('image/jpeg', 0.8), frame: cand.frame, w: cand.cv.width, h: cand.cv.height } : null);
       const rec: Recording = {
         id: uid(),
         exId: ex.id,
@@ -176,6 +235,35 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       }
     })();
 
+    /** false while counting is paused because you've left your position */
+    function stillThere(t: number, ok: boolean) {
+      if (ok) {
+        outSince = 0;
+        if (paused) {
+          inSince ||= t;
+          if (t - inSince > 0.6) {
+            paused = false;
+            inSince = 0;
+            cand = null;
+            counter!.resumeAfterGap(t);
+            setOut(false);
+            thump();
+          }
+        }
+      } else {
+        inSince = 0;
+        outSince ||= t;
+        if (!paused && t - outSince > 1.2) {
+          paused = true;
+          cand = null;
+          counter!.resumeAfterGap(t);
+          setOut(true);
+          thump();
+        }
+      }
+      return !paused;
+    }
+
     function startLoop(lm: Awaited<ReturnType<typeof loadPose>>, v: HTMLVideoElement, step = false) {
       {
         setPhase('setup');
@@ -216,6 +304,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
 
           if (!res.landmarks?.[0] || !res.worldLandmarks?.[0]) {
             okSince = 0;
+            if (counter) stillThere(t, false);
             return;
           }
           const f = frameFromResult(res.landmarks[0], res.worldLandmarks[0], t);
@@ -232,16 +321,28 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
               setChecks(chk);
             }
             const good = chk.visible && chk.distance === 'ok' && chk.view === 'ok';
-            if (good || skipRef.current) {
+            const begin = () => {
+              counter = new RepCounter(prof, betterSide(f, prof.signal), ar);
+              counter.armNow = startReq.current;
+              startedRef.current = true;
+              if (import.meta.env.DEV) (window as unknown as { __counter: RepCounter }).__counter = counter;
+              setPhase('tracking');
+              thump();
+              if (startReq.current) chimeRep(6); // the beep means: go
+            };
+            if (startReq.current) begin();
+            else if (voiceRef.current === 'on' || voiceRef.current === 'loading') okSince = 0; // waits for your word
+            else if (good || skipRef.current) {
               okSince ||= t;
-              if (t - okSince > 0.8 || skipRef.current) {
-                counter = new RepCounter(prof, betterSide(f, prof.signal), ar);
-                if (import.meta.env.DEV) (window as unknown as { __counter: RepCounter }).__counter = counter;
-                setPhase('tracking');
-                thump();
-              }
+              if (t - okSince > 0.8 || skipRef.current) begin();
             } else okSince = 0;
             drawSkeleton(ctx, f.p, map, good ? 'rgba(183,243,107,0.9)' : 'rgba(243,239,231,0.55)', 3, f.vis);
+            return;
+          }
+
+          // way out of position: stop counting until you're back, so walking around can't add reps
+          if (!stillThere(t, inPosition(f, prof))) {
+            drawSkeleton(ctx, f.p, map, 'rgba(243,239,231,0.35)', 3, f.vis);
             return;
           }
 
@@ -273,13 +374,14 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             chimeRep(counter.reps.length);
             thump();
             setReps(counter.reps.length);
+            repsRef.current = counter.reps.length;
             setBars(counter.reps.map((r) => r.dur));
           }
 
           drawSkeleton(ctx, f.p, map, 'rgba(243,239,231,0.95)', 4, f.vis);
 
           // auto-finish: a few reps done and you've been still for 4 seconds
-          if (counter.reps.length >= 1 && t - Math.max(counter.lastMoveT, counter.reps[counter.reps.length - 1].t1) > 4) finish();
+          if (voiceRef.current !== 'on' && counter.reps.length >= 1 && t - Math.max(counter.lastMoveT, counter.reps[counter.reps.length - 1].t1) > 4) finish();
         };
         if (!step) {
           raf = requestAnimationFrame(loop);
@@ -360,7 +462,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         <div className="ghost-title">
           <span>{ex.name}</span>
           <em>
-            {fmtW(weight)} kg · tracking {SIGNAL_LABEL[prof.signal]}
+            {loadText(weight, ex)} · tracking {SIGNAL_LABEL[prof.signal]}
           </em>
         </div>
         <button
@@ -391,8 +493,14 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       )}
 
       {phase === 'loading' && <div className="ghost-msg">Waking up the spotter…</div>}
-      {phase === 'setup' && <SetupPanel prof={prof} checks={checks} canSkip={canSkip} onSkip={() => (skipRef.current = true)} />}
-      {phase === 'tracking' && !armed && (
+      {phase === 'setup' && <SetupPanel prof={prof} checks={checks} canSkip={canSkip} onSkip={() => (skipRef.current = true)} voice={voice} onStart={() => (startReq.current = true)} />}
+      {phase === 'tracking' && out && (
+        <div className="ghost-hint warn">
+          <b>Out of position — counting paused</b>
+          <span>Get back in frame and it picks up where you left off</span>
+        </div>
+      )}
+      {phase === 'tracking' && !armed && !out && (
         <div className="ghost-hint">
           <b>Get into your start position</b>
           <span>Hold still for a second — counting starts automatically</span>
@@ -416,6 +524,11 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
             </div>
           </div>
           <div className="ghost-bottom">
+            {voice === 'on' && (
+              <div className="voice-tag">
+                <Mic size={14} /> Say “stop” when you’re done
+              </div>
+            )}
             <div className="rep-bars">
               {bars.map((d, i) => (
                 <motion.i key={i} initial={{ scaleY: 0 }} animate={{ scaleY: 1 }} style={{ height: `${Math.max(14, (d / maxBar) * 100)}%` }} transition={spring} />
@@ -471,7 +584,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
                   onLog(logReps);
                 }}
               >
-                <Check size={22} /> Log {fmtW(weight)} kg × {logReps}
+                <Check size={22} /> Log {loadText(weight, ex)} × {logReps}
               </button>
               <button className="btn-ghost" onClick={close}>
                 Discard, log by hand
@@ -538,7 +651,21 @@ export function drawSkeleton(
 
 const VIEW_LABEL = { side: 'Side-on', front: 'Facing the phone', angle: '45° angle' } as const;
 
-function SetupPanel({ prof, checks, canSkip, onSkip }: { prof: ReturnType<typeof profileFor>; checks: SetupCheck | null; canSkip: boolean; onSkip: () => void }) {
+function SetupPanel({
+  prof,
+  checks,
+  canSkip,
+  onSkip,
+  voice,
+  onStart,
+}: {
+  prof: ReturnType<typeof profileFor>;
+  checks: SetupCheck | null;
+  canSkip: boolean;
+  onSkip: () => void;
+  voice: VoiceState;
+  onStart: () => void;
+}) {
   const items: { ok: boolean; label: string; fix: string }[] = [
     { ok: !!checks?.visible, label: 'Whole body in frame', fix: 'Step back or tilt the phone until your arms and legs are all in view' },
     {
@@ -552,6 +679,26 @@ function SetupPanel({ prof, checks, canSkip, onSkip }: { prof: ReturnType<typeof
       fix: checks?.view === 'turn-side' ? 'Turn 90° so your side faces the phone' : 'Turn to face the phone',
     },
   ];
+  const waitsForWord = voice === 'on' || voice === 'loading';
+  const allGood = items.every((it) => it.ok);
+  const cue = waitsForWord && (
+    <div className="voice-cue">
+      <span>
+        <Mic size={16} />
+        <b>{voice === 'on' ? 'Say “start”, then lift on the beep' : 'Getting voice ready…'}</b>
+      </span>
+      <button className="btn-primary" onClick={onStart}>
+        Start
+      </button>
+    </div>
+  );
+  // in position: get out of the way so you can see yourself
+  if (allGood && waitsForWord)
+    return (
+      <div className="setup">
+        <div className="setup-card">{cue}</div>
+      </div>
+    );
   return (
     <div className="setup">
       <div className="setup-card">
@@ -573,7 +720,9 @@ function SetupPanel({ prof, checks, canSkip, onSkip }: { prof: ReturnType<typeof
             </li>
           ))}
         </ul>
-        {canSkip && (
+        {cue}
+        {voice === 'failed' && <p className="muted small">Voice isn’t available, so counting starts on its own.</p>}
+        {canSkip && !waitsForWord && (
           <button className="link-btn" onClick={onSkip}>
             Start anyway
           </button>

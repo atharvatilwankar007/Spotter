@@ -2,7 +2,8 @@ import { ArrowRight, Play } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useState } from 'react';
 import { prepareAlarms, thump, unlockAudio } from '../lib/native';
-import { ago, estMinutes, fmtW, lastDone, lastSets, nextDayId, startOfDay } from '../lib/progress';
+import { shortLoad } from '../lib/load';
+import { ago, estMinutes, lastDone, lastSets, nextDayId, startOfDay } from '../lib/progress';
 import { startSession, useStore } from '../lib/store';
 
 const spring = { type: 'spring', stiffness: 360, damping: 32 } as const;
@@ -86,7 +87,7 @@ export function Today() {
                   {ex.sets} × {ex.repMin}–{ex.repMax} · rest {Math.round(ex.rest / 6) / 10} min
                 </small>
               </span>
-              <span className="plan-last tnum">{top ? `${fmtW(top.w)}×${top.r}` : 'new'}</span>
+              <span className="plan-last tnum">{top ? `${shortLoad(top, ex)}×${top.r}` : 'new'}</span>
             </motion.div>
           );
         })}

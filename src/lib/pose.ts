@@ -268,6 +268,21 @@ export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   return { visible, distance, view, facing };
 }
 
+/**
+ * Mid-set check, much looser than the setup one: only true "you've left" situations fail it
+ * (walked off, most tracked joints out of frame, way too near or far), so a normal rep never pauses the count.
+ */
+export function inPosition(f: Frame, prof: Profile): boolean {
+  const left = prof.signal === 'elbow' || prof.signal === 'shoulder' || prof.signal === 'spread' ? [LS, LE, LH] : [LS, LH, LK];
+  const right = prof.signal === 'elbow' || prof.signal === 'shoulder' || prof.signal === 'spread' ? [RS, RE, RH] : [RS, RH, RK];
+  const seen = (i: number) => f.vis[i] > 0.3 && f.p[i * 2] > -0.03 && f.p[i * 2] < 1.03 && f.p[i * 2 + 1] > -0.03 && f.p[i * 2 + 1] < 1.03;
+  const best = Math.max(left.filter(seen).length, right.filter(seen).length);
+  const torso = Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2);
+  const wide = Math.abs(f.p[LS * 2] - f.p[RS * 2]);
+  const size = Math.max(torso, wide); // a lying or bent-over body has a short torso but is still in frame
+  return best >= 2 && size > 0.04 && size < 0.7;
+}
+
 /* ---------- rep counter ---------- */
 
 /** One-Euro filter: removes jitter when still, stays responsive when moving */
@@ -316,6 +331,7 @@ export class RepCounter {
   depth = 0; // unclamped travel toward the far end of the rep
   captureFrom = Infinity; // depth worth photographing
   armed = false;
+  armNow = false; // you said start: this exact position is the start, no need to hold still
   private f = new OneEuro();
   private raw: number[] = [];
   private farCheck?: (f: Frame) => boolean;
@@ -345,6 +361,21 @@ export class RepCounter {
     this.minTravel = Math.max(prof.signal === 'rise' ? 4 : 12, prof.rom * 0.35);
   }
 
+  /** you left the frame: drop any half-finished rep and re-lock on your start position when you're back */
+  resumeAfterGap(t: number) {
+    this.armed = false;
+    this.armNow = false;
+    this.phase = 'rest';
+    this.holdSince = 0;
+    this.raw = [];
+    this.f = new OneEuro();
+    this.prevV = null;
+    this.farOk = false;
+    this.peak = 0;
+    this.reverseChecked = true;
+    this.lastMoveT = t;
+  }
+
   /** end of set: if you stopped (or hit Done) on the way back from a real rep, count it */
   flush(t: number): RepStat | null {
     if (this.phase !== 'out' || !this.farOk || this.peak < Math.max(this.minTravel, this.learned * 0.6) || t - this.leaveT < 0.45) return null;
@@ -371,6 +402,12 @@ export class RepCounter {
 
     // 1. arm: hold still for 0.6 s; that position is your start
     if (!this.armed) {
+      if (this.armNow) {
+        this.armed = true;
+        this.base = v;
+        this.leaveT = t;
+        return null;
+      }
       if (!this.holdSince || Math.abs(v - this.holdVal) > this.minTravel * 0.35) {
         this.holdSince = t;
         this.holdVal = v;

@@ -1,14 +1,13 @@
-import { Camera, Check, ChevronRight, List, Plus, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
+import { ArrowLeftRight, BellOff, Camera, Check, ChevronRight, List, Minus, Plus, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
 import { profileFor } from '../lib/pose';
 import { ExercisePicker } from './ExercisePicker';
 import { GhostCam } from './GhostCam';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  buzzDone,
+  alarmPulse,
   buzzWarn,
   cancelRestAlarm,
-  chimeDone,
   chimeWarn,
   scheduleRestAlarm,
   stayAwake,
@@ -16,7 +15,8 @@ import {
   unlockAudio,
   webNotify,
 } from '../lib/native';
-import { ago, e1rm, fmtW, lastSets, mmss, prefill, target, bestE1rm } from '../lib/progress';
+import { fromShow, kindOf, loadText, setMark, shortLoad, stepShow, toShow, unitLabel, unitOf } from '../lib/load';
+import { ago, e1rm, lastSets, mmss, prefill, target, bestE1rm } from '../lib/progress';
 import {
   addExerciseToSession,
   adjustRest,
@@ -26,12 +26,17 @@ import {
   getState,
   goToExercise,
   logSet,
+  nextPendingIdx,
+  saveExercise,
   startRest,
+  swapToExercise,
   undoLastSet,
   useStore,
 } from '../lib/store';
-import type { Exercise, SetLog } from '../lib/types';
+import type { Exercise, LoadKind, SetLog } from '../lib/types';
+import { preloadVoice } from '../lib/voice';
 import { Scrubber } from './Scrubber';
+import { SetChips, SetEditSheet, type EditTarget } from './SetEdit';
 import { Sheet } from './Sheet';
 
 const spring = { type: 'spring', stiffness: 380, damping: 34 } as const;
@@ -44,6 +49,14 @@ export function SessionScreen({ onFinished }: { onFinished: (id: string | null) 
   const ex = s.exercises[a.order[a.exIdx]];
   const [listOpen, setListOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const openSwap = () => setListOpen(true);
+
+  // warm up the voice listener in the background so Ghost Set opens ready
+  useEffect(() => {
+    if (getState().settings.voice === false) return;
+    const t = setTimeout(() => preloadVoice().catch(() => {}), 2500);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     stayAwake(true);
@@ -97,16 +110,16 @@ export function SessionScreen({ onFinished }: { onFinished: (id: string | null) 
       />
       <AnimatePresence mode="wait" initial={false}>
         {a.phase === 'rest' ? (
-          <RestView key="rest" ex={ex} />
+          <RestView key="rest" ex={ex} onSwap={openSwap} />
         ) : (
-          <LogView key={'log-' + ex.id} ex={ex} onFinish={finish} />
+          <LogView key={'log-' + ex.id} ex={ex} onFinish={finish} onSwap={openSwap} />
         )}
       </AnimatePresence>
 
-      <Sheet open={listOpen} onClose={() => setListOpen(false)} title="Exercises">
+      <Sheet open={listOpen} onClose={() => setListOpen(false)} title="What's next?">
         <ExerciseList
           onPick={(i) => {
-            goToExercise(i);
+            swapToExercise(i);
             setListOpen(false);
           }}
           onAdd={(id) => {
@@ -193,19 +206,23 @@ function TopBar(p: {
 
 /* ---------- logging a set ---------- */
 
-function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
+function LogView({ ex, onFinish, onSwap }: { ex: Exercise; onFinish: () => void; onSwap: () => void }) {
   const s = useStore((x) => x);
   const a = s.active!;
   const session = s.sessions.find((x) => x.id === a.sessionId)!;
   const mine = session.sets.filter((x) => x.exId === ex.id);
-  const last = useMemo(() => lastSets(getState(), ex.id, session.id), [ex.id, session.id]);
+  const kind = kindOf(ex);
+  const last = useMemo(() => lastSets(getState(), ex.id, session.id), [ex.id, session.id, kind]); // eslint-disable-line react-hooks/exhaustive-deps
   const goal = useMemo(() => target(ex, last?.sets), [ex, last]);
   const [vals, setVals] = useState(() => prefill(ex, session.sets, last?.sets));
   const [justLogged, setJustLogged] = useState(false);
   const [pr, setPr] = useState(false);
   const setNo = mine.length + (justLogged ? 0 : 1);
   const ref = last?.sets[Math.min(setNo - 1, last.sets.length - 1)];
-  const isLastEx = a.exIdx >= a.order.length - 1;
+  const nextIdx = nextPendingIdx();
+  const isLastEx = nextIdx < 0;
+  const nextEx = isLastEx ? null : s.exercises[a.order[nextIdx]];
+  const [editing, setEditing] = useState<EditTarget | null>(null);
   const doneTarget = mine.length >= ex.sets;
 
   const [cam, setCam] = useState(false);
@@ -217,7 +234,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
     const sessionBest = Math.max(0, ...mine.map((x) => e1rm(x.w, x.r)));
     const cur = e1rm(w, r);
     setPr(best > 0 && cur > best && cur > sessionBest);
-    logSet({ exId: ex.id, w, r });
+    logSet({ exId: ex.id, w, r, u: setMark(ex) });
     thump();
     setJustLogged(true);
   };
@@ -231,8 +248,16 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
   const next = () => {
     if (isLastEx) return onFinish();
     setJustLogged(false);
-    goToExercise(a.exIdx + 1);
+    goToExercise(nextIdx);
     startRest(ex.rest);
+  };
+
+  const setKind = (load: LoadKind) => {
+    thump();
+    const updated = { ...ex, load };
+    saveExercise(updated);
+    const w = prefill(updated, session.sets, lastSets(getState(), ex.id, session.id)?.sets).w;
+    setVals((v) => ({ ...v, w }));
   };
 
   return (
@@ -250,18 +275,37 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
         <h1 className="ex-name">{ex.name}</h1>
         <div className="set-dots">
           {Array.from({ length: Math.max(ex.sets, mine.length + (justLogged ? 0 : 1)) }).map((_, i) => (
-            <span key={i} className={`dot ${i < mine.length ? 'on' : ''} ${i === mine.length && !justLogged ? 'now' : ''}`}>
+            <button
+              key={i}
+              disabled={i >= mine.length}
+              onClick={() => setEditing({ sessionId: session.id, set: mine[i] })}
+              aria-label={i < mine.length ? `Edit set ${i + 1}` : undefined}
+              className={`dot ${i < mine.length ? 'on' : ''} ${i === mine.length && !justLogged ? 'now' : ''}`}
+            >
               {i < mine.length ? (
                 <>
-                  {fmtW(mine[i].w)}
+                  {shortLoad(mine[i], ex)}
                   <small>×{mine[i].r}</small>
                 </>
               ) : (
                 <>Set {i + 1}</>
               )}
-            </span>
+            </button>
           ))}
+          <span className="sets-adj">
+            <button onClick={() => (thump(), saveExercise({ ...ex, sets: Math.max(1, ex.sets - 1) }))} disabled={ex.sets <= 1} aria-label="One set fewer">
+              <Minus size={14} />
+            </button>
+            <button onClick={() => (thump(), saveExercise({ ...ex, sets: ex.sets + 1 }))} aria-label="One set more">
+              <Plus size={14} />
+            </button>
+          </span>
         </div>
+        {mine.length === 0 && !justLogged && a.order.length > 1 && (
+          <button className="swap-btn" onClick={onSwap}>
+            <ArrowLeftRight size={15} /> Machine taken? Do something else
+          </button>
+        )}
       </div>
 
       {ex.notes && <p className="ex-notes">{ex.notes}</p>}
@@ -273,7 +317,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
             <span className="tnum last-sets">
               {last.sets.map((x, i) => (
                 <b key={i} className={i === setNo - 1 ? 'hl' : ''}>
-                  {fmtW(x.w)}×{x.r}
+                  {shortLoad(x, ex)}×{x.r}
                 </b>
               ))}
             </span>
@@ -287,21 +331,46 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
         <button className="goal" onClick={() => (thump(), setVals({ w: goal.w, r: goal.r }))}>
           <span className="goal-tag">Beat it</span>
           <span className="tnum">
-            {fmtW(goal.w)} kg × {goal.r}
+            {loadText(goal.w, ex)} × {goal.r}
           </span>
           <em>{goal.why}</em>
         </button>
       )}
 
+      <div className="load-row">
+        <div className="seg-ctl">
+          {(
+            [
+              ['weight', 'Weight'],
+              ['bar', 'Bar +'],
+              ['holes', 'Holes'],
+            ] as const
+          ).map(([k, label]) => (
+            <button key={k} className={kind === k ? 'on' : ''} onClick={() => kind !== k && setKind(k)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {kind !== 'holes' && (
+          <div className="seg-ctl">
+            {(['kg', 'lb'] as const).map((u) => (
+              <button key={u} className={unitOf(ex) === u ? 'on' : ''} onClick={() => (thump(), saveExercise({ ...ex, unit: u }))}>
+                {u}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="controls">
         <Scrubber
-          label="Weight"
-          unit="kg"
-          value={vals.w}
-          step={ex.step}
-          max={500}
-          delta={ref ? vals.w - ref.w : null}
-          onChange={(w) => setVals((v) => ({ ...v, w }))}
+          label={kind === 'holes' ? 'Holes' : kind === 'bar' ? 'Plates on the bar' : 'Weight'}
+          unit={unitLabel(ex)}
+          value={toShow(vals.w, ex)}
+          step={stepShow(ex)}
+          max={kind === 'holes' ? 60 : 1100}
+          delta={ref ? +(toShow(vals.w, ex) - toShow(ref.w, ex)).toFixed(1) : null}
+          onChange={(v) => setVals((x) => ({ ...x, w: fromShow(v, ex) }))}
         />
         <Scrubber
           label="Reps"
@@ -373,7 +442,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
             >
               {pr && (
                 <motion.div className="pr-flash" initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ ...spring, delay: 0.05 }}>
-                  New best · {fmtW(vals.w)} × {vals.r}
+                  New best · {loadText(vals.w, ex)} × {vals.r}
                 </motion.div>
               )}
               {!doneTarget ? (
@@ -382,7 +451,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
                     <RotateCcw size={22} /> Another set <span className="pill-time">{mmss(ex.rest)}</span>
                   </button>
                   <button className="btn-ghost" onClick={next}>
-                    {isLastEx ? 'Finish workout' : 'Next exercise'} <ChevronRight size={18} />
+                    {isLastEx ? 'Finish workout' : `Next: ${nextEx?.name}`} <ChevronRight size={18} />
                   </button>
                 </>
               ) : (
@@ -394,7 +463,7 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
                       </>
                     ) : (
                       <>
-                        Next exercise <ChevronRight size={22} />
+                        <span className="cta-name">Next: {nextEx?.name}</span> <ChevronRight size={22} />
                       </>
                     )}
                   </button>
@@ -403,13 +472,24 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
                   </button>
                 </>
               )}
-              <button className="link-btn" onClick={() => (undoLastSet(), setJustLogged(false), setPr(false))}>
-                <Undo2 size={15} /> Undo
-              </button>
+              <div className="choice-links">
+                {!isLastEx && (
+                  <button className="link-btn" onClick={onSwap}>
+                    <ArrowLeftRight size={15} /> Pick another
+                  </button>
+                )}
+                <button className="link-btn" onClick={() => setEditing({ sessionId: session.id, set: mine[mine.length - 1] })}>
+                  Edit set
+                </button>
+                <button className="link-btn" onClick={() => (undoLastSet(), setJustLogged(false), setPr(false))}>
+                  <Undo2 size={15} /> Undo
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
+      <SetEditSheet edit={editing} onClose={() => setEditing(null)} onDeleted={() => (setJustLogged(false), setPr(false))} />
     </motion.section>
   );
 }
@@ -419,18 +499,21 @@ function LogView({ ex, onFinish }: { ex: Exercise; onFinish: () => void }) {
 const R = 132;
 const C = 2 * Math.PI * R;
 
-function RestView({ ex }: { ex: Exercise }) {
+function RestView({ ex, onSwap }: { ex: Exercise; onSwap: () => void }) {
   const a = useStore((x) => x.active)!;
   const sessions = useStore((x) => x.sessions);
   const session = sessions.find((x) => x.id === a.sessionId)!;
   const [left, setLeft] = useState(() => (a.restEndsAt - Date.now()) / 1000);
   const warned = useRef(false);
   const fired = useRef(false);
+  const [ringing, setRinging] = useState(false);
   const mineCount = session.sets.filter((x) => x.exId === ex.id).length;
   const up = prefill(ex, session.sets, lastSets(getState(), ex.id, session.id)?.sets);
 
   useEffect(() => {
     let raf = 0;
+    fired.current = false;
+    setRinging(false);
     const loop = () => {
       const l = (a.restEndsAt - Date.now()) / 1000;
       setLeft(l);
@@ -444,12 +527,13 @@ function RestView({ ex }: { ex: Exercise }) {
       }
       if (l <= 0 && !fired.current) {
         fired.current = true;
-        const late = -l > 8; // came back long after it ended: no fanfare
-        if (!late && !document.hidden) {
-          chimeDone();
-          buzzDone();
-        } else if (document.hidden) webNotify('Rest over — next set', `${ex.name} — you're up`);
-        endRest();
+        if (-l > 180) {
+          endRest(); // came back long after it ended: nothing left to ring for
+          return;
+        }
+        if (document.hidden) webNotify('Rest over — next set', `${ex.name} — you're up`);
+        setLeft(0);
+        setRinging(true);
         return;
       }
       raf = requestAnimationFrame(loop);
@@ -457,6 +541,42 @@ function RestView({ ex }: { ex: Exercise }) {
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [a.restEndsAt, a.restTotal, ex.name]);
+
+  // keeps ringing until you press Stop (gives up after 3 minutes so it can't ring forever)
+  useEffect(() => {
+    if (!ringing) return;
+    const started = Date.now();
+    const beat = () => {
+      if (!document.hidden && Date.now() - started < 180000) alarmPulse();
+    };
+    beat();
+    const t = setInterval(beat, 1600);
+    return () => clearInterval(t);
+  }, [ringing]);
+
+  const stop = () => {
+    thump();
+    cancelRestAlarm();
+    endRest();
+  };
+
+  if (ringing)
+    return (
+      <motion.section className="alarm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+        <motion.div className="alarm-pulse" animate={{ scale: [1, 1.5], opacity: [0.55, 0] }} transition={{ duration: 1.6, repeat: Infinity, ease: 'easeOut' }} />
+        <span className="eyebrow accent">Rest over</span>
+        <h1 className="alarm-title">Time to lift</h1>
+        <p className="muted">
+          Set {mineCount + 1} · {ex.name}
+        </p>
+        <button className="btn-primary big alarm-stop" onClick={stop}>
+          <BellOff size={24} /> Stop
+        </button>
+        <button className="chip-btn" onClick={() => (thump(), cancelRestAlarm(), startRest(30))}>
+          30 more seconds
+        </button>
+      </motion.section>
+    );
 
   const frac = Math.max(0, Math.min(1, left / a.restTotal));
   const hot = left <= 10;
@@ -527,8 +647,11 @@ function RestView({ ex }: { ex: Exercise }) {
           <span className="eyebrow">Up next · Set {mineCount + 1}</span>
           <strong>{ex.name}</strong>
           <span className="tnum muted">
-            {fmtW(up.w)} kg × {up.r}
+            {loadText(up.w, ex)} × {up.r}
           </span>
+          <button className="swap-btn" onClick={onSwap}>
+            <ArrowLeftRight size={15} /> Change exercise
+          </button>
         </div>
         <button className="btn-primary" onClick={() => (cancelRestAlarm(), endRest())}>
           <SkipForward size={18} /> Go now
@@ -547,21 +670,27 @@ function ExerciseList({ onPick, onAdd }: { onPick: (i: number) => void; onAdd: (
   const [adding, setAdding] = useState(false);
   return (
     <div className="stack">
+      <p className="muted small">Tap one to do it now. Anything you skip comes back at the end.</p>
       {a.order.map((id, i) => {
         const ex = s.exercises[id];
         if (!ex) return null;
-        const n = session.sets.filter((x) => x.exId === id).length;
+        const mine = session.sets.filter((x) => x.exId === id);
+        const n = mine.length;
         return (
-          <button key={id} className={`row ${i === a.exIdx ? 'row-cur' : ''}`} onClick={() => onPick(i)}>
-            <span className={`row-check ${n >= ex.sets ? 'done' : ''}`}>{n >= ex.sets ? <Check size={14} /> : i + 1}</span>
-            <span className="row-main">
-              <b>{ex.name}</b>
-              <small className="muted">
-                {n}/{ex.sets} sets
-              </small>
-            </span>
-            <ChevronRight size={18} className="muted" />
-          </button>
+          <div key={id} className="swap-item">
+            <button className={`row ${i === a.exIdx ? 'row-cur' : ''}`} onClick={() => onPick(i)}>
+              <span className={`row-check ${n >= ex.sets ? 'done' : ''}`}>{n >= ex.sets ? <Check size={14} /> : i + 1}</span>
+              <span className="row-main">
+                <b>{ex.name}</b>
+                <small className="muted">
+                  {i === a.exIdx ? 'Doing now · ' : ''}
+                  {n}/{ex.sets} sets
+                </small>
+              </span>
+              <ChevronRight size={18} className="muted" />
+            </button>
+            {n > 0 && <SetChips sessionId={session.id} sets={mine} ex={ex} />}
+          </div>
         );
       })}
       {!adding ? (

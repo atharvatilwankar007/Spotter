@@ -77,6 +77,18 @@ export function chimeRep(n: number) {
   tone(520 + Math.min(n, 12) * 40, 0, 0.12, 0.16);
 }
 
+/** one beat of the rest alarm; repeated until you press Stop */
+export function alarmPulse() {
+  if (getState().settings.sound) {
+    unlockAudio();
+    [0, 0.2, 0.4].forEach((at) => tone(1046.5, at, 0.16, 0.34));
+    tone(1568, 0.62, 0.3, 0.34);
+  }
+  if (!getState().settings.vibrate) return;
+  if (isNative) Haptics.vibrate({ duration: 700 }).catch(() => {});
+  else navigator.vibrate?.([300, 120, 300]);
+}
+
 export function chimeWarn() {
   if (!getState().settings.sound) return;
   unlockAudio();
@@ -107,7 +119,7 @@ export async function stayAwake(on: boolean) {
 
 /* ---------- rest alarm when the phone is locked / app in background ---------- */
 
-const REST_ID = 4242;
+const REST_IDS = Array.from({ length: 12 }, (_, i) => ({ id: 4242 + i })); // 3 minutes of rings
 const CHANNEL = 'rest-alarm';
 let channelReady = false;
 
@@ -138,20 +150,19 @@ export async function scheduleRestAlarm(at: number, body: string) {
   if (!isNative || at <= Date.now() + 500) return;
   try {
     await prepareAlarms();
-    await LocalNotifications.cancel({ notifications: [{ id: REST_ID }] });
+    await LocalNotifications.cancel({ notifications: REST_IDS });
+    // Android can't loop a notification, so while the app is closed it rings again every 15 s until you come back
     await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: REST_ID,
-          title: 'Rest over — next set',
-          body,
-          channelId: CHANNEL,
-          schedule: { at: new Date(at), allowWhileIdle: true },
-          smallIcon: 'ic_stat_spotter',
-          iconColor: '#ff6a2b',
-          autoCancel: true,
-        },
-      ],
+      notifications: REST_IDS.map(({ id }, i) => ({
+        id,
+        title: 'Rest over — next set',
+        body,
+        channelId: CHANNEL,
+        schedule: { at: new Date(at + i * 15000), allowWhileIdle: true },
+        smallIcon: 'ic_stat_spotter',
+        iconColor: '#ff6a2b',
+        autoCancel: true,
+      })),
     });
   } catch {
     /* ignore */
@@ -161,7 +172,8 @@ export async function scheduleRestAlarm(at: number, body: string) {
 export async function cancelRestAlarm() {
   if (!isNative) return;
   try {
-    await LocalNotifications.cancel({ notifications: [{ id: REST_ID }] });
+    await LocalNotifications.cancel({ notifications: REST_IDS });
+    await LocalNotifications.removeAllDeliveredNotifications();
   } catch {
     /* ignore */
   }

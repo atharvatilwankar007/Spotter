@@ -1,4 +1,5 @@
 // Exercise library: common gym movements and their variations, searchable.
+import { getState } from './store';
 import type { Equip, Exercise, Muscle } from './types';
 
 // [name, muscle, equipment, kind]  kind: c = compound (heavier, longer rest), i = isolation
@@ -258,7 +259,7 @@ export function fromLibrary(it: { name: string; muscle: Muscle; equip: Equip; ki
     name: it.name,
     muscle: it.muscle,
     equip: it.equip,
-    sets: 3,
+    sets: getState().settings.defaultSets ?? 3,
     repMin: core ? 10 : heavy ? 6 : 10,
     repMax: core ? 20 : heavy ? 10 : 15,
     rest: heavy ? 150 : core ? 60 : 90,

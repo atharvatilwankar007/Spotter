@@ -1,19 +1,27 @@
+import { addText, kindOf, stepKg } from './load';
 import type { Exercise, Session, SetLog, State } from './types';
+export { fmtW } from './format';
 
 /** Epley estimated one-rep max */
 export const e1rm = (w: number, r: number) => (r <= 1 ? w : w * (1 + r / 30));
 
-export const fmtW = (w: number) => (Number.isInteger(w) ? String(w) : w.toFixed(w * 10 === Math.round(w * 10) ? 1 : 2));
-
 const done = (s: State) => s.sessions.filter((x) => x.end);
+
+/** holes, bar + plates and plain weight can't be compared, so each only sees its own history */
+const sameKind = (s: State, exId: string) => {
+  const ex = s.exercises[exId];
+  const k = ex ? kindOf(ex) : 'weight';
+  return (x: SetLog) => (x.u ?? 'weight') === k;
+};
 
 /** Sets of an exercise in the most recent finished session (excluding one) that contained it */
 export function lastSets(s: State, exId: string, excludeSessionId?: string): { sets: SetLog[]; at: number } | null {
   const list = done(s);
+  const same = sameKind(s, exId);
   for (let i = list.length - 1; i >= 0; i--) {
     const ses = list[i];
     if (ses.id === excludeSessionId) continue;
-    const sets = ses.sets.filter((x) => x.exId === exId);
+    const sets = ses.sets.filter((x) => x.exId === exId && same(x));
     if (sets.length) return { sets, at: ses.start };
   }
   return null;
@@ -31,42 +39,45 @@ export function target(ex: Exercise, last: SetLog[] | undefined): Target | null 
   const topW = Math.max(...last.map((x) => x.w));
   const atTop = last.filter((x) => x.w === topW);
   const allMaxed = atTop.length >= Math.min(ex.sets, last.length) && atTop.every((x) => x.r >= ex.repMax);
-  if (allMaxed) return { w: topW + ex.step, r: ex.repMin, why: `+${fmtW(ex.step)} kg` };
+  if (allMaxed) return { w: topW + stepKg(ex), r: ex.repMin, why: addText(ex) };
   const minReps = Math.min(...atTop.map((x) => x.r));
   return { w: topW, r: Math.min(minReps + 1, ex.repMax), why: '+1 rep' };
 }
 
 /** What to prefill for the next set */
 export function prefill(ex: Exercise, sessionSets: SetLog[], last: SetLog[] | undefined): { w: number; r: number } {
-  const mine = sessionSets.filter((x) => x.exId === ex.id);
+  const k = kindOf(ex);
+  const mine = sessionSets.filter((x) => x.exId === ex.id && (x.u ?? 'weight') === k);
   if (mine.length) {
     const p = mine[mine.length - 1];
     return { w: p.w, r: p.r };
   }
   const t = target(ex, last);
   if (t) return { w: t.w, r: t.r };
-  return { w: 20, r: ex.repMin };
+  return { w: k === 'holes' ? 5 : 20, r: ex.repMin };
 }
 
 export function bestE1rm(s: State, exId: string, beforeT = Infinity) {
   let best = 0;
-  for (const ses of done(s)) for (const x of ses.sets) if (x.exId === exId && x.t < beforeT) best = Math.max(best, e1rm(x.w, x.r));
+  const same = sameKind(s, exId);
+  for (const ses of done(s)) for (const x of ses.sets) if (x.exId === exId && x.t < beforeT && same(x)) best = Math.max(best, e1rm(x.w, x.r));
   return best;
 }
 
 /** One point per session: best e1RM that session */
 export function series(s: State, exId: string) {
   const pts: { t: number; v: number; top: SetLog }[] = [];
+  const same = sameKind(s, exId);
   for (const ses of done(s)) {
     let top: SetLog | null = null;
-    for (const x of ses.sets) if (x.exId === exId && (!top || e1rm(x.w, x.r) > e1rm(top.w, top.r))) top = x;
+    for (const x of ses.sets) if (x.exId === exId && same(x) && (!top || e1rm(x.w, x.r) > e1rm(top.w, top.r))) top = x;
     if (top) pts.push({ t: ses.start, v: e1rm(top.w, top.r), top });
   }
   return pts;
 }
 
 export function volume(sets: SetLog[]) {
-  return sets.reduce((a, x) => a + x.w * x.r, 0);
+  return sets.reduce((a, x) => (x.u === 'holes' ? a : a + x.w * x.r), 0); // holes aren't a real weight
 }
 
 export function nextDayId(s: State): string | undefined {
@@ -97,6 +108,7 @@ export function sessionPRs(s: State, ses: Session) {
   const prs: SetLog[] = [];
   const byEx = new Map<string, SetLog>();
   for (const x of ses.sets) {
+    if (!sameKind(s, x.exId)(x)) continue;
     const prevBest = bestE1rm(s, x.exId, ses.start);
     const cur = byEx.get(x.exId);
     if (prevBest > 0 && e1rm(x.w, x.r) > prevBest && (!cur || e1rm(x.w, x.r) > e1rm(cur.w, cur.r))) byEx.set(x.exId, x);

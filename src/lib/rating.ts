@@ -1,6 +1,6 @@
 // One number for a set (0–10), a one-line headline, and the single most useful thing to do next set.
 import type { Analysis, RepStat } from './pose';
-import { fmtW } from './progress';
+import { addText, loadText, stepKg } from './load';
 import type { Exercise, SetLog } from './types';
 
 export interface Rating {
@@ -93,8 +93,8 @@ export function rateSet(opts: {
   else if (count < ex.repMin && range > 0.7) next = `Drop the weight a little so you can hit ${ex.repMin}+ full reps.`;
   else if (a.romDrop > 0.12 || cuts >= 2) next = 'Same weight — stop the set when your depth starts to drop.';
   else if (rushed > 0.4) next = 'Slow down: take about 2 seconds on the way down.';
-  else if (count >= ex.repMax && loss < 0.2) next = `You had more in you — add ${fmtW(ex.step)} kg next set.`;
-  else if (count >= ex.repMax) next = `Top of your range — try ${fmtW(weight + ex.step)} kg next time.`;
+  else if (count >= ex.repMax && loss < 0.2) next = `You had more in you — go ${addText(ex)} next set.`;
+  else if (count >= ex.repMax) next = `Top of your range — try ${loadText(weight + stepKg(ex), ex)} next time.`;
   else next = 'Same weight — go for one more rep.';
 
   return { score, label, tone, headline, next, parts };
