@@ -1,5 +1,6 @@
 import { motion } from 'motion/react';
 import type { Rating } from '../lib/rating';
+import { repList, type FormReport } from '../lib/form';
 import { useEffect, useRef, useState } from 'react';
 import { BONES, GRADE_LABEL, signals, visibleTriple, type Analysis, type Frame, type Recording, type Signal } from '../lib/pose';
 
@@ -49,7 +50,7 @@ const torso = (f: Frame) => {
   return { hx, hy, len: Math.hypot(sx - hx, sy - hy) };
 };
 
-function StillCanvas({ still, mirrored, signal, overlay, label, width, ar = 4 / 3 }: { still: Still; mirrored: boolean; signal: Signal; overlay?: Still; label: string; width: number; ar?: number }) {
+function StillCanvas({ still, mirrored, signal, overlay, label, width, ar = 4 / 3, marks }: { still: Still; mirrored: boolean; signal: Signal; overlay?: Still; label: string; width: number; ar?: number; marks?: number[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const h = Math.round((width * still.h) / still.w);
   useEffect(() => {
@@ -108,6 +109,30 @@ function StillCanvas({ still, mirrored, signal, overlay, label, width, ar = 4 / 
         ctx.stroke();
       }
 
+      // a form problem: circle the body points involved instead of drawing the angle
+      if (marks?.length) {
+        const pts = marks.filter((i) => f.vis[i] > 0.3).map((i) => [X(f.p[i * 2]), Y(f.p[i * 2 + 1])]);
+        ctx.save();
+        ctx.strokeStyle = '#ff4d3d';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = 'rgba(255,77,61,0.9)';
+        ctx.shadowBlur = 12;
+        if (pts.length > 1) {
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          pts.forEach(([px, py], k) => (k ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        for (const [px, py] of pts) {
+          ctx.beginPath();
+          ctx.arc(px, py, Math.max(9, width * 0.05), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+
       // angle arc at the tracked joint
       const tri = visibleTriple(f, signal);
       const ang = signals(f, ar)[signal];
@@ -153,7 +178,7 @@ function StillCanvas({ still, mirrored, signal, overlay, label, width, ar = 4 / 
       }
     };
     img.src = still.url;
-  }, [still, overlay, mirrored, signal, width, h, ar]);
+  }, [still, overlay, mirrored, signal, width, h, ar, marks]);
   return (
     <div className="still">
       <canvas ref={ref} style={{ width, height: h }} />
@@ -194,6 +219,57 @@ export function BestWorst({ stills, a, rec, mirrored }: { stills: (Still | null)
       <p className="bw-note">
         Rep {a.worst + 1} reached <b>{pct}%</b> of your best rep's range. <span className="accent">Orange dashes</span> = where your best rep got to.
       </p>
+    </div>
+  );
+}
+
+/* ---------- form: did it look like the exercise, and what to fix ---------- */
+
+/** the short version, right under the score */
+export function FormCard({ form }: { form: FormReport }) {
+  if (form.mismatch)
+    return (
+      <div className="form-card warn">
+        <span className="eyebrow">Check the exercise</span>
+        <p>{form.mismatch}</p>
+      </div>
+    );
+  if (!form.checked) return null;
+  if (!form.findings.length)
+    return (
+      <div className="form-card good">
+        <span className="eyebrow">Form</span>
+        <p>No form problems spotted on this set.</p>
+      </div>
+    );
+  return (
+    <div className="form-card">
+      <span className="eyebrow">Form · fix this</span>
+      {form.findings.map((f) => (
+        <div key={f.id} className="form-item">
+          <b>{f.title}</b>
+          <small className="muted">{repList(f.reps)}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** in Detailed review: each problem on the photo of the rep that showed it most */
+export function FormStills({ form, stills, rec, mirrored }: { form: FormReport; stills: (Still | null)[]; rec: Recording; mirrored: boolean }) {
+  const shown = form.findings.filter((f) => stills[f.worst]);
+  if (!shown.length) return null;
+  return (
+    <div className="form-stills">
+      {shown.map((f) => (
+        <div key={f.id} className="form-still">
+          <StillCanvas still={stills[f.worst]!} mirrored={mirrored} signal={rec.signal} ar={rec.ar} label={`Rep ${f.worst + 1}`} width={Math.min(320, innerWidth - 56)} marks={f.joints} />
+          <div>
+            <b>{f.title}</b>
+            <p>{f.fix}</p>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

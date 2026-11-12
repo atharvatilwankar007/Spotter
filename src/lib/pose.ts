@@ -10,6 +10,8 @@ export const BONES: [number, number][] = [
   [LS, RS], [LS, LE], [LE, LW], [RS, RE], [RE, RW], [LS, LH], [RS, RH], [LH, RH], [LH, LK], [LK, LA], [RH, RK], [RK, RA],
 ];
 export const HEAD = H;
+/** landmark positions within a Frame, by name */
+export const J = { H, LS, RS, LE, RE, LW, RW, LH, RH, LK, RK, LA, RA } as const;
 
 export interface Frame {
   t: number; // seconds since recording start
@@ -87,6 +89,16 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
   spread: 'hand spread',
 };
 
+/** arms: shoulders, elbows, hands · legs: shoulders to feet · hinge: shoulders to knees · full: whole body */
+export type Need = 'arms' | 'legs' | 'hinge' | 'full';
+export const NEED_LABEL: Record<Need, string> = {
+  arms: 'Shoulders, elbows and hands in frame',
+  legs: 'Shoulders down to feet in frame',
+  hinge: 'Shoulders down to knees in frame',
+  full: 'Whole body in frame',
+};
+const needFor = (s: Signal): Need => (s === 'elbow' || s === 'shoulder' || s === 'spread' ? 'arms' : s === 'knee' ? 'legs' : s === 'hip' ? 'hinge' : 'full');
+
 export interface Profile {
   track: boolean; // can the camera count this one at all?
   signal: Signal;
@@ -95,6 +107,7 @@ export interface Profile {
   view: View;
   beta?: boolean; // harder to see (lying, machines in the way)
   hint: string; // phone placement in plain words
+  need: Need; // which body parts must be in frame
   /** extra geometric proof that the far end of a real rep was reached (y grows downward) */
   farCheck?: (f: Frame) => boolean;
 }
@@ -113,7 +126,7 @@ const SIDE_HINT = 'Stand side-on to the phone, about 2–3 m away, phone at hip 
 const FRONT_HINT = 'Face the phone, about 2–3 m away, phone at chest height.';
 const ANGLE_HINT = 'Put the phone at a 45° angle, level with the bench, about 2 m away.';
 
-type Rule = [RegExp, Omit<Profile, 'hint' | 'track'> & { track?: boolean }];
+type Rule = [RegExp, Omit<Profile, 'hint' | 'track' | 'need'> & { track?: boolean }];
 const RULES: Rule[] = [
   [/plank|hold|hang|carry|bug|pallof|chop|twist|side bend|copenhagen|shrug|wrist curl|abduction|adduction/, { track: false, signal: 'hip', restHigh: true, rom: 0, view: 'side' }],
   [/calf/, { signal: 'rise', restHigh: false, rom: 10, view: 'side' }],
@@ -146,13 +159,13 @@ const RULES: Rule[] = [
 export function profileFor(ex: Exercise): Profile {
   const n = ex.name.toLowerCase();
   // any shoulder press (standing, seated, dumbbell, machine…) starts at the shoulders and presses up
-  if (ex.muscle === 'Shoulders' && /press/.test(n)) return { track: true, signal: 'elbow', restHigh: false, rom: 65, view: 'front', hint: FRONT_HINT, farCheck: wristsOverhead };
+  if (ex.muscle === 'Shoulders' && /press/.test(n)) return { track: true, signal: 'elbow', restHigh: false, rom: 65, view: 'front', hint: FRONT_HINT, need: 'arms', farCheck: wristsOverhead };
   for (const [re, p] of RULES)
-    if (re.test(n)) return { track: true, ...p, hint: p.view === 'side' ? SIDE_HINT : p.view === 'front' ? FRONT_HINT : ANGLE_HINT };
+    if (re.test(n)) return { track: true, ...p, need: needFor(p.signal), hint: p.view === 'side' ? SIDE_HINT : p.view === 'front' ? FRONT_HINT : ANGLE_HINT };
   // custom exercises: best guess from the muscle
   const by: Partial<Record<Exercise['muscle'], Signal>> = { Quads: 'knee', Hamstrings: 'hip', Glutes: 'hip', Core: 'hip', Calves: 'rise' };
   const signal = by[ex.muscle] ?? 'elbow';
-  return { track: true, signal, restHigh: signal !== 'rise', rom: signal === 'rise' ? 10 : 50, view: 'side', hint: SIDE_HINT };
+  return { track: true, signal, restHigh: signal !== 'rise', rom: signal === 'rise' ? 10 : 50, view: 'side', hint: SIDE_HINT, need: needFor(signal) };
 }
 
 /* ---------- geometry (2D, in the camera's image, corrected for aspect ratio) ---------- */
@@ -164,7 +177,7 @@ const TRIPLES: Record<'elbow' | 'knee' | 'hip' | 'shoulder', [[number, number, n
   shoulder: [[LH, LS, LE], [RH, RS, RE]],
 };
 
-function angle2(f: Frame, ar: number, [a, b, c]: [number, number, number]) {
+export function angle2(f: Frame, ar: number, [a, b, c]: [number, number, number]) {
   const ux = (f.p[a * 2] - f.p[b * 2]) * ar;
   const uy = f.p[a * 2 + 1] - f.p[b * 2 + 1];
   const vx = (f.p[c * 2] - f.p[b * 2]) * ar;
@@ -242,11 +255,13 @@ export interface SetupCheck {
 
 export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   const need =
-    prof.signal === 'elbow' || prof.signal === 'shoulder' || prof.signal === 'spread'
-      ? [LS, RS, LE, RE, LW, RW, LH, RH]
-      : prof.signal === 'rise'
-        ? [LS, RS, LH, RH, LA, RA]
-        : [LS, RS, LH, RH, LK, RK, LA, RA];
+    prof.need === 'arms'
+      ? [LS, RS, LE, RE, LW, RW]
+      : prof.need === 'hinge'
+        ? [LS, RS, LH, RH, LK, RK]
+        : prof.need === 'full'
+          ? [LS, RS, LH, RH, LA, RA]
+          : [LS, RS, LH, RH, LK, RK, LA, RA];
   // for side views one side may be hidden behind the body: need either side clearly
   const sideOk = (idx: number[]) => idx.filter((i) => f.vis[i] > 0.5 && f.p[i * 2] > 0.02 && f.p[i * 2] < 0.98 && f.p[i * 2 + 1] > 0.02 && f.p[i * 2 + 1] < 0.98).length;
   const left = need.filter((i) => [LS, LE, LW, LH, LK, LA].includes(i));
@@ -254,8 +269,12 @@ export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   const visible = prof.view === 'front' ? sideOk(need) >= need.length - 1 : Math.max(sideOk(left), sideOk(right)) >= left.length - 1;
 
   // how big the body is in the frame (shoulder to hip, as a share of frame height)
-  const torso = Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2);
-  const distance = torso > 0.42 ? 'back' : torso < 0.09 ? 'closer' : 'ok';
+  // hips may be out of frame for arm exercises: then judge size from the upper arm instead
+  const hipsSeen = Math.max(f.vis[LH], f.vis[RH]) > 0.5 && Math.min(f.p[LH * 2 + 1], f.p[RH * 2 + 1]) < 1;
+  const ua = Math.max(...[[LS, LE], [RS, RE]].map(([s, e]) => (f.vis[s] > 0.5 && f.vis[e] > 0.5 ? Math.hypot((f.p[s * 2] - f.p[e * 2]) * ar, f.p[s * 2 + 1] - f.p[e * 2 + 1]) : 0)));
+  const torso = hipsSeen || !ua ? Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2) : ua * 1.6;
+  // arm exercises are fine closer up: only the upper body has to fit
+  const distance = torso > (prof.need === 'arms' ? 0.62 : 0.42) ? 'back' : torso < 0.09 ? 'closer' : 'ok';
 
   // facing: how wide the shoulders look vs how deep (world coords)
   const dx = f.w[RS * 3] - f.w[LS * 3];
@@ -264,7 +283,6 @@ export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   const facing: View = r > 0.78 ? 'front' : r < 0.5 ? 'side' : 'angle';
   const view =
     prof.view === 'side' ? (facing === 'front' ? 'turn-side' : 'ok') : prof.view === 'front' ? (facing === 'side' ? 'turn-front' : 'ok') : 'ok';
-  void ar;
   return { visible, distance, view, facing };
 }
 
@@ -279,8 +297,9 @@ export function inPosition(f: Frame, prof: Profile): boolean {
   const best = Math.max(left.filter(seen).length, right.filter(seen).length);
   const torso = Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2);
   const wide = Math.abs(f.p[LS * 2] - f.p[RS * 2]);
-  const size = Math.max(torso, wide); // a lying or bent-over body has a short torso but is still in frame
-  return best >= 2 && size > 0.04 && size < 0.7;
+  const arm = Math.max(Math.hypot(f.p[LS * 2] - f.p[LE * 2], f.p[LS * 2 + 1] - f.p[LE * 2 + 1]), Math.hypot(f.p[RS * 2] - f.p[RE * 2], f.p[RS * 2 + 1] - f.p[RE * 2 + 1]));
+  const size = Math.max(torso, wide, prof.need === 'arms' ? arm * 1.6 : 0); // a lying or bent-over body has a short torso but is still in frame
+  return best >= 2 && size > 0.04 && size < (prof.need === 'arms' ? 0.95 : 0.7);
 }
 
 /* ---------- rep counter ---------- */

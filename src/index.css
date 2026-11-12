@@ -1801,6 +1801,7 @@ p {
 }
 .still {
   position: relative;
+  width: fit-content;
   border-radius: var(--r);
   overflow: hidden;
   border: 1px solid var(--line-2);
@@ -2339,4 +2340,56 @@ p {
   color: var(--text);
   font-size: 13.5px;
   font-weight: 600;
+}
+
+.form-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border-left: 3px solid #ff4d3d;
+}
+.form-card.good {
+  border-left-color: #b7f36b;
+}
+.form-card.warn {
+  border-left-color: var(--accent);
+}
+.form-card p {
+  font-size: 14px;
+  color: var(--text-2);
+}
+.form-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.form-item b {
+  font-size: 15px;
+}
+.form-item small {
+  flex: none;
+}
+.form-stills {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.form-still {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.form-still > div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.form-still p {
+  font-size: 13.5px;
+  color: var(--text-2);
 }

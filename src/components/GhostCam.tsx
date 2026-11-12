@@ -12,6 +12,7 @@ import {
   HEAD,
   inPosition,
   loadPose,
+  NEED_LABEL,
   profileFor,
   RepCounter,
   SIGNAL_LABEL,
@@ -21,8 +22,9 @@ import {
   type SetupCheck,
 } from '../lib/pose';
 import { loadText } from '../lib/load';
-import { BestWorst, RepStrip, ScoreParts, SetScore, type Still } from './SetReview';
+import { BestWorst, FormCard, FormStills, RepStrip, ScoreParts, SetScore, type Still } from './SetReview';
 import { rateSet } from '../lib/rating';
+import { checkForm, type FormReport } from '../lib/form';
 import { lastSets } from '../lib/progress';
 import { getState, uid } from '../lib/store';
 import { startVoice, type Word } from '../lib/voice';
@@ -69,7 +71,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const stopVoice = useRef<() => void>(() => {});
   const [logReps, setLogReps] = useState(0);
   const [detail, setDetail] = useState(false);
-  const [result, setResult] = useState<{ rec: Recording; a: Analysis; stills: (Still | null)[] } | null>(null);
+  const [result, setResult] = useState<{ rec: Recording; a: Analysis; stills: (Still | null)[]; form: FormReport } | null>(null);
   const ghost = useRef<Recording | null>(null);
   const stopRef = useRef<() => void>(() => {});
   const finishRef = useRef<(spoken?: boolean) => void>(() => {});
@@ -179,7 +181,9 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
       if (import.meta.env.DEV && location.search.includes('testshallow')) rec.reps = rec.reps.map((r, i) => ({ ...r, rom: r.rom * (i >= 3 ? 0.82 - (i - 3) * 0.05 : 1) }));
       const a = analyse(rec, ghost.current);
       setLogReps(a.reps);
-      setResult({ rec, a, stills: stills.map((x) => x) });
+      const form = checkForm(ex, rec);
+      if (import.meta.env.DEV) Object.assign(window, { __rec: rec, __form: form });
+      setResult({ rec, a, stills: stills.map((x) => x), form });
       setPhase('summary');
     };
     finishRef.current = finish;
@@ -412,7 +416,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
   const rating = useMemo(
     () =>
       result
-        ? rateSet({ a: result.a, reps: result.rec.reps, count: logReps, weight, ex, last: lastSets(getState(), ex.id, sessionId)?.sets })
+        ? rateSet({ a: result.a, reps: result.rec.reps, count: logReps, weight, ex, last: lastSets(getState(), ex.id, sessionId)?.sets, form: result.form })
         : null,
     [result, logReps, weight, ex, sessionId],
   );
@@ -545,6 +549,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         {phase === 'summary' && result && (
           <motion.div className="ghost-sheet" initial={{ y: '100%' }} animate={{ y: 0 }} transition={spring}>
             <SetScore rating={rating!} reps={logReps} />
+            <FormCard form={result.form} />
             <button className="detail-toggle" onClick={() => (tick(), setDetail(!detail))} aria-expanded={detail}>
               Detailed review <ChevronDown size={16} className={detail ? 'flip' : ''} />
             </button>
@@ -553,6 +558,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
                     <ScoreParts rating={rating!} />
                     <p className="detail-verdict">{result.a.verdict}</p>
                     {result.a.reps > 0 && <RepStrip a={result.a} />}
+                    <FormStills form={result.form} stills={result.stills} rec={result.rec} mirrored={mirrored} />
                     <BestWorst stills={result.stills} a={result.a} rec={result.rec} mirrored={mirrored} />
                     <div className="ghost-facts tnum">
                       {result.a.vsLine && <span>{result.a.vsLine}</span>}
@@ -667,7 +673,7 @@ function SetupPanel({
   onStart: () => void;
 }) {
   const items: { ok: boolean; label: string; fix: string }[] = [
-    { ok: !!checks?.visible, label: 'Whole body in frame', fix: 'Step back or tilt the phone until your arms and legs are all in view' },
+    { ok: !!checks?.visible, label: NEED_LABEL[prof.need], fix: prof.need === 'arms' ? 'Tilt the phone or step back until both arms and hands are in view' : 'Step back or tilt the phone until those body parts are all in view' },
     {
       ok: checks?.distance === 'ok',
       label: 'Good distance',

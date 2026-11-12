@@ -35,3 +35,6 @@ keys/
 # copied from node_modules at build time
 public/mediapipe/
 public/__test/
+
+# your gym clips stay on this PC
+clips/

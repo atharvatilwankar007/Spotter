@@ -1,4 +1,5 @@
 // One number for a set (0–10), a one-line headline, and the single most useful thing to do next set.
+import type { FormReport } from './form';
 import type { Analysis, RepStat } from './pose';
 import { addText, loadText, stepKg } from './load';
 import type { Exercise, SetLog } from './types';
@@ -21,8 +22,9 @@ export function rateSet(opts: {
   weight: number;
   ex: Exercise;
   last?: SetLog[]; // this exercise last time
+  form?: FormReport;
 }): Rating {
-  const { a, reps, count, weight, ex, last } = opts;
+  const { a, reps, count, weight, ex, last, form } = opts;
   const n = reps.length;
   const maxRom = Math.max(0, ...reps.map((r) => r.rom));
 
@@ -63,11 +65,16 @@ export function rateSet(opts: {
     }
   }
 
+  // form: each problem costs in proportion to how many reps had it
+  const top = form?.findings[0];
+  const formScore = form?.checked ? clamp01(1 - (form.findings.reduce((s, f) => s + f.reps.length / Math.max(1, n), 0) * 0.45)) : null;
+
   const parts = [
     { key: 'range', label: 'Range on every rep', value: range, weight: 0.4 },
     { key: 'target', label: `Reps vs your ${ex.repMin}–${ex.repMax} target`, value: target, weight: 0.2 },
     { key: 'control', label: 'Control & tempo', value: control, weight: 0.2 },
     ...(progress != null ? [{ key: 'progress', label: 'Progress vs last time', value: progress, weight: 0.2 }] : []),
+    ...(formScore != null ? [{ key: 'form', label: 'Form', value: formScore, weight: 0.25 }] : []),
   ];
   const wsum = parts.reduce((s, p) => s + p.weight, 0);
   const score = n ? Math.round((parts.reduce((s, p) => s + p.value * p.weight, 0) / wsum) * 100) / 10 : 0;
@@ -77,6 +84,7 @@ export function rateSet(opts: {
   // headline: the main story in plain words
   const bits: string[] = [];
   if (!n) bits.push('No reps were picked up');
+  else if (top) bits.push(top.title);
   else if (a.romDrop > 0.12) bits.push('Strong start, last reps got shallow');
   else if (cuts >= 2) bits.push('Depth varied from rep to rep');
   else if (range > 0.85 && control > 0.75) bits.push('Clean, consistent reps');
@@ -90,6 +98,7 @@ export function rateSet(opts: {
   const loss = n >= 3 ? reps[n - 1].dur / Math.min(...reps.slice(0, 3).map((r) => r.dur)) - 1 : 0.3;
   let next: string;
   if (!n) next = 'Check the phone placement, then try again.';
+  else if (top) next = top.fix;
   else if (count < ex.repMin && range > 0.7) next = `Drop the weight a little so you can hit ${ex.repMin}+ full reps.`;
   else if (a.romDrop > 0.12 || cuts >= 2) next = 'Same weight — stop the set when your depth starts to drop.';
   else if (rushed > 0.4) next = 'Slow down: take about 2 seconds on the way down.';
