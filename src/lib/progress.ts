@@ -76,6 +76,18 @@ export function series(s: State, exId: string) {
   return pts;
 }
 
+/** One point per finished session: your heaviest set that day (more reps wins a tie) */
+export function topSets(s: State, exId: string) {
+  const same = sameKind(s, exId);
+  const pts: { t: number; set: SetLog }[] = [];
+  for (const ses of done(s)) {
+    let top: SetLog | null = null;
+    for (const x of ses.sets) if (x.exId === exId && same(x) && (!top || x.w > top.w || (x.w === top.w && x.r > top.r))) top = x;
+    if (top) pts.push({ t: ses.start, set: top });
+  }
+  return pts;
+}
+
 export function volume(sets: SetLog[]) {
   return sets.reduce((a, x) => (x.u === 'holes' ? a : a + x.w * x.r), 0); // holes aren't a real weight
 }
