@@ -272,7 +272,9 @@ export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   // hips may be out of frame for arm exercises: then judge size from the upper arm instead
   const hipsSeen = Math.max(f.vis[LH], f.vis[RH]) > 0.5 && Math.min(f.p[LH * 2 + 1], f.p[RH * 2 + 1]) < 1;
   const ua = Math.max(...[[LS, LE], [RS, RE]].map(([s, e]) => (f.vis[s] > 0.5 && f.vis[e] > 0.5 ? Math.hypot((f.p[s * 2] - f.p[e * 2]) * ar, f.p[s * 2 + 1] - f.p[e * 2 + 1]) : 0)));
-  const torso = hipsSeen || !ua ? Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2) : ua * 1.6;
+  // trunk length in any direction (a crunch, push-up or bent-over row has a near-horizontal trunk)
+  const trunk = Math.hypot(((f.p[LS * 2] + f.p[RS * 2]) / 2 - (f.p[LH * 2] + f.p[RH * 2]) / 2) * ar, (f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2);
+  const torso = hipsSeen || !ua ? trunk : ua * 1.6;
   // arm exercises are fine closer up: only the upper body has to fit
   const distance = torso > (prof.need === 'arms' ? 0.62 : 0.42) ? 'back' : torso < 0.09 ? 'closer' : 'ok';
 
@@ -298,7 +300,8 @@ export function inPosition(f: Frame, prof: Profile): boolean {
   const torso = Math.abs((f.p[LS * 2 + 1] + f.p[RS * 2 + 1]) / 2 - (f.p[LH * 2 + 1] + f.p[RH * 2 + 1]) / 2);
   const wide = Math.abs(f.p[LS * 2] - f.p[RS * 2]);
   const arm = Math.max(Math.hypot(f.p[LS * 2] - f.p[LE * 2], f.p[LS * 2 + 1] - f.p[LE * 2 + 1]), Math.hypot(f.p[RS * 2] - f.p[RE * 2], f.p[RS * 2 + 1] - f.p[RE * 2 + 1]));
-  const size = Math.max(torso, wide, prof.need === 'arms' ? arm * 1.6 : 0); // a lying or bent-over body has a short torso but is still in frame
+  const trunk = Math.hypot((f.p[LS * 2] + f.p[RS * 2]) / 2 - (f.p[LH * 2] + f.p[RH * 2]) / 2, torso);
+  const size = Math.max(trunk, wide, prof.need === 'arms' ? arm * 1.6 : 0); // a lying or bent-over body has a short torso but is still in frame
   return best >= 2 && size > 0.04 && size < (prof.need === 'arms' ? 0.95 : 0.7);
 }
 

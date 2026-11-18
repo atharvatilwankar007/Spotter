@@ -4,10 +4,12 @@
 import { angle2, J, JOINT_TRIPLES, type Frame, type Recording, type Signal } from './pose';
 import type { Exercise } from './types';
 
-export type Move = 'squat' | 'hinge' | 'lunge' | 'hpress' | 'pushup' | 'ohp' | 'vpull' | 'row' | 'curl' | 'triceps' | 'raise' | 'other';
+export type Move = 'squat' | 'hinge' | 'lunge' | 'hpress' | 'pushup' | 'ohp' | 'vpull' | 'row' | 'curl' | 'triceps' | 'raise' | 'crunch' | 'other';
 
 const MOVES: [RegExp, Move][] = [
   [/upright row|lateral|front raise|y-raise/, 'raise'],
+  // kneeling / cable crunch: the hips should stay put while the trunk curls
+  [/cable crunch|kneeling crunch|rope crunch/, 'crunch'],
   [/leg ext|leg curl|nordic|glute-ham|leg press|calf|hip thrust|glute bridge|crunch|sit-?up|leg raise|knee raise|face pull|rear delt|reverse pec|fly|pec deck|crossover|pullover|straight-arm/, 'other'],
   [/pulldown|pull-?up|chin/, 'vpull'],
   [/row|inverted/, 'row'],
@@ -323,6 +325,30 @@ const CUES: Record<Move, Cue[]> = {
     },
     uneven,
   ],
+  crunch: [
+    {
+      id: 'hips-back',
+      title: 'Hips sitting back on your heels',
+      fix: 'Keep your hips over your knees and curl your ribs down to them.',
+      joints: (c) => [side(c.s).H, side(c.s).K],
+      test: (fs, c) => {
+        const j = side(c.s);
+        // how far the hip sits behind the knee, along the line the trunk points (away from the head = back),
+        // as a share of trunk length (so it works at any camera distance)
+        const back = (f: Frame) => {
+          if (!ok(f, j.S, j.H, j.K)) return null;
+          const dir = Math.sign(x(f, j.S) - x(f, j.H)) || 1;
+          const trunk = Math.hypot((x(f, j.S) - x(f, j.H)) * c.ar, y(f, j.S) - y(f, j.H));
+          return trunk > 0.02 ? ((x(f, j.K) - x(f, j.H)) * dir * c.ar) / trunk : null;
+        };
+        const start = nums(fs.slice(0, 3).map(back))[0];
+        const v = nums(fs.map(back));
+        if (start == null || v.length < 4) return null;
+        // a clean crunch keeps the hips still; sliding back more than ~8% of the trunk is the hips doing the work
+        return (Math.max(...v) - start) / 0.08;
+      },
+    },
+  ],
   other: [],
 };
 
@@ -340,6 +366,7 @@ const NAME: Record<Move, string> = {
   curl: 'a curl',
   triceps: 'a triceps exercise',
   raise: 'a raise',
+  crunch: 'a crunch',
   other: 'this exercise',
 };
 
