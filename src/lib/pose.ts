@@ -78,7 +78,7 @@ export function loadPose(): Promise<PoseLandmarker> {
 
 export type Signal = 'elbow' | 'knee' | 'hip' | 'shoulder' | 'rise' | 'spread';
 export type Side = 'L' | 'R' | 'both';
-export type View = 'side' | 'front' | 'angle';
+export type View = 'side' | 'front' | 'angle' | 'either'; // either = side-on or facing the phone
 
 export const SIGNAL_LABEL: Record<Signal, string> = {
   elbow: 'elbow angle',
@@ -123,6 +123,7 @@ const wristAboveElbow = (f: Frame) => [[LW, LE], [RW, RE]].some(([w, e]) => seen
 const handsAtShoulder = (f: Frame) => [[LW, LS], [RW, RS]].some(([w, s]) => seen(f, w) && y(f, w) < y(f, s) + torsoLen(f) * 0.25);
 
 const SIDE_HINT = 'Stand side-on to the phone, about 2–3 m away, phone at hip height.';
+const EITHER_HINT = 'Side-on or facing the phone, about 2–3 m away, phone at hip height.';
 const FRONT_HINT = 'Face the phone, about 2–3 m away, phone at chest height.';
 const ANGLE_HINT = 'Put the phone at a 45° angle, level with the bench, about 2 m away.';
 
@@ -140,7 +141,9 @@ const RULES: Rule[] = [
   [/leg ext/, { signal: 'knee', restHigh: false, rom: 60, view: 'side', beta: true }],
   [/lying leg curl/, { signal: 'knee', restHigh: true, rom: 60, view: 'side', beta: true }],
   [/leg curl|nordic|glute-ham/, { signal: 'knee', restHigh: true, rom: 60, view: 'side', beta: true }],
-  [/squat|lunge|leg press|split|step-up|hack|pendulum|belt/, { signal: 'knee', restHigh: true, rom: 65, view: 'side' }],
+  // squats read fine from the front too (depth from the knee angle); only the forward-lean check needs side-on
+  [/squat|hack|pendulum|belt/, { signal: 'knee', restHigh: true, rom: 65, view: 'either' }],
+  [/lunge|leg press|split|step-up/, { signal: 'knee', restHigh: true, rom: 65, view: 'side' }],
   [/rear delt|reverse pec|face pull/, { signal: 'spread', restHigh: false, rom: 80, view: 'front' }],
   [/fly|pec deck|crossover/, { signal: 'spread', restHigh: true, rom: 90, view: 'front' }],
   [/pullover|straight-arm/, { signal: 'shoulder', restHigh: true, rom: 60, view: 'side' }],
@@ -161,7 +164,7 @@ export function profileFor(ex: Exercise): Profile {
   // any shoulder press (standing, seated, dumbbell, machine…) starts at the shoulders and presses up
   if (ex.muscle === 'Shoulders' && /press/.test(n)) return { track: true, signal: 'elbow', restHigh: false, rom: 65, view: 'front', hint: FRONT_HINT, need: 'arms', farCheck: wristsOverhead };
   for (const [re, p] of RULES)
-    if (re.test(n)) return { track: true, ...p, need: needFor(p.signal), hint: p.view === 'side' ? SIDE_HINT : p.view === 'front' ? FRONT_HINT : ANGLE_HINT };
+    if (re.test(n)) return { track: true, ...p, need: needFor(p.signal), hint: p.view === 'side' ? SIDE_HINT : p.view === 'front' ? FRONT_HINT : p.view === 'either' ? EITHER_HINT : ANGLE_HINT };
   // custom exercises: best guess from the muscle
   const by: Partial<Record<Exercise['muscle'], Signal>> = { Quads: 'knee', Hamstrings: 'hip', Glutes: 'hip', Core: 'hip', Calves: 'rise' };
   const signal = by[ex.muscle] ?? 'elbow';
@@ -284,7 +287,7 @@ export function checkSetup(f: Frame, prof: Profile, ar: number): SetupCheck {
   const r = Math.abs(dx) / (Math.hypot(dx, dz) || 1);
   const facing: View = r > 0.78 ? 'front' : r < 0.5 ? 'side' : 'angle';
   const view =
-    prof.view === 'side' ? (facing === 'front' ? 'turn-side' : 'ok') : prof.view === 'front' ? (facing === 'side' ? 'turn-front' : 'ok') : 'ok';
+    prof.view === 'side' ? (facing === 'front' ? 'turn-side' : 'ok') : prof.view === 'front' ? (facing === 'side' ? 'turn-front' : 'ok') : 'ok'; // angle / either: any
   return { visible, distance, view, facing };
 }
 

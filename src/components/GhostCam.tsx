@@ -394,7 +394,7 @@ export function GhostCam({ ex, weight, sessionId, onClose, onLog }: Props) {
         // dev test mode: step through the video file frame by frame at 15 fps (independent of tab throttling)
         (async () => {
           v.pause();
-          for (let i = 0; !dead && i < 15 * 30; i++) {
+          for (let i = 0; !dead && i < 15 * Math.min(90, v.duration || 30); i++) {
             v.currentTime = (i / 15) % v.duration;
             await new Promise((r) => (v.onseeked = r));
             lastTs += 67;
@@ -655,7 +655,7 @@ export function drawSkeleton(
   ctx.restore();
 }
 
-const VIEW_LABEL = { side: 'Side-on', front: 'Facing the phone', angle: '45° angle' } as const;
+const VIEW_LABEL = { side: 'Side-on', front: 'Facing the phone', angle: '45° angle', either: 'Side-on or facing' } as const;
 
 function SetupPanel({
   prof,
@@ -739,8 +739,8 @@ function SetupPanel({
 }
 
 /** top-down sketch: where the phone goes relative to you */
-function ViewDiagram({ view }: { view: 'side' | 'front' | 'angle' }) {
-  const rot = view === 'side' ? 90 : view === 'angle' ? 45 : 0;
+function ViewDiagram({ view }: { view: 'side' | 'front' | 'angle' | 'either' }) {
+  const rot = view === 'side' || view === 'either' ? 90 : view === 'angle' ? 45 : 0;
   return (
     <svg className="view-diagram" viewBox="0 0 64 64" aria-hidden>
       <rect x="27" y="47" width="10" height="14" rx="2.5" fill="none" stroke="var(--accent)" strokeWidth="2" />
